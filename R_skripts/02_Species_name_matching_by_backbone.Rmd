@@ -1,5 +1,5 @@
 ---
-title: "02_taxonomic_matching"
+title: "02_Species_name_matching"
 author: "Andreas Mehl"
 date: "2025-01-14"
 output: html_document
@@ -946,7 +946,7 @@ head(EpIG_occ.match)
 table(EpIG_occ.match$Matched)
 ```
 
-I also need to get the family and genus for each species, for both, the names which came out of the matched or "new" (from the backbone) and for those we used to enter or those SPECIES.ORIG. I do so here, but at the end I need to reconstruct a new dataframe contaning all information from the data from Maria Judith, plus the following fields:
+I also need to get the family and genus for each species, for both, the names which came out of the matched or "new" (from the backbone) and for those we used to enter for those SPECIES.ORIG. I do so here, but at the end I need to reconstruct a new dataframe contaning all information from the data from Maria Judith, plus the following fields:
 
 prev.Family = epis_occ_families$families
 prev.Genus = epis_occ_families$genus
@@ -1518,10 +1518,5 @@ save(aa,
 #Filters out records where the species field is empty.
 ```
 
-From here I should be able to go to line 2115 and run the code as it follows. #ToDo 
 
-
-
-We need to use lamberts equal area or Behrmann equal area. The code below is from the file:
-"F:/Academic/e_Student_Supervision/Andreas/Shortfalls/code/Sorted analysis skript.R", whatever code I used above is from this source:
 

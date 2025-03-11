@@ -22,7 +22,7 @@ datos <- EstimatorsAllFamilies %>%
   rename(n = Records, SR = Observed.richness)
 
 # Save as a shapefile
-# st_write(datos, "G:/My Drive/0_Research/0CONTINENT/1.Data/2.GAP Analysis/Shortfalls/output/Allmetrics30/output_cells.shp", driver = "ESRI Shapefile")
+# st_write(datos, "output/Allmetrics30/output_cells.shp", driver = "ESRI Shapefile")
 ```
 
 Save it with Lambert projection
@@ -44,8 +44,8 @@ crs(poly_laea)
 crs(datos_laea)
 
 # Guardar los shapefiles reproyectados
-st_write(poly_laea, "G:/My Drive/0_Research/0CONTINENT/1.Data/2.GAP Analysis/Shortfalls/output/Allmetrics30/poly_laea.shp", delete_layer = TRUE)
-st_write(datos_laea, "G:/My Drive/0_Research/0CONTINENT/1.Data/2.GAP Analysis/Shortfalls/output/Allmetrics30/datos_laea.shp", delete_layer = TRUE)
+st_write(poly_laea, "output/Allmetrics30/poly_laea.shp", delete_layer = TRUE)
+st_write(datos_laea, "output/Allmetrics30/datos_laea.shp", delete_layer = TRUE)
 ```
 
 # Manuscript paragraphs for the results section

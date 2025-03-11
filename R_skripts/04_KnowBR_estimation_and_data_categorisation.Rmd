@@ -6,20 +6,14 @@ output: html_document
 ---
 
 ```{r}
-  library(KnowBR)
-  library(vegan)
-  library(plotrix)
-  library(sp)
-  library(viridis)
-  library(raster)
-  library(dplyr)
-  
+
+  #Load data
   load("output/pams_for_completeness_v2.Rdata")
   
+# Select data for half-degree resolution
   neotropical_epyphites_completeness <- for_comp[["half_degree"]]
   
-  neotropical_epyphites_completeness <- for_comp[["fifth_degree"]]
-  
+ # Clean data by removing rows with missing latitude or longitude
   clean_data <- neotropical_epyphites_completeness %>%
     filter(!is.na(Latitude) & !is.na(Longitude))
   
@@ -30,6 +24,7 @@ output: html_document
   Counts <- clean_data$Counts 
   Family <- clean_data$family
   
+  # Combine extracted data into a matrix
   result_matrix <- cbind(Species = clean_data$Species,
                          Longitude = clean_data$Longitude, 
                          Latitude = clean_data$Latitude, 
@@ -38,7 +33,7 @@ output: html_document
   # Convert the matrix to a data frame
   result_df <- as.data.frame(result_matrix)
   
-  # Ensure columns are numeric where needed
+ # Ensure numeric columns are properly formatted
   result_df$Longitude <- as.numeric(result_df$Longitude)
   result_df$Latitude <- as.numeric(result_df$Latitude)
   result_df$Counts <- as.numeric(result_df$Counts)
@@ -61,93 +56,6 @@ output: html_document
       pro=TRUE,
       inc=0.005,
       save="RData",
-      file4="Completeness/Main30exp/Estimators")
-  
-  # list to store the results
-  all_estimators <- list()
-  
-  load("Completeness/Main30exp/Estimators.RData")
-  Estimators <- values
-  
-  # Add a column to specify the family or if is for all combined
-  Estimators$Family <- "All_Families"
-  all_estimators[["All_Families"]] <- Estimators
-  
-  families <- c("Orchidaceae", "Bromeliaceae", "Araceae", "Piperaceae", "Polypodiaceae")
-  
-  for (var in families) {
-    family_data <- clean_data %>% filter(Family == var)
-    
-    # Combine into a matrix
-    result_matrix <- cbind(Species = family_data$Species, 
-                           Longitude = family_data$Longitude, 
-                           Latitude = family_data$Latitude, 
-                           Counts = family_data$Counts, 
-                           Family = family_data$Family)
-  
-  # Convert the matrix to a data frame
-  result_df <- as.data.frame(result_matrix)
-  
-  # Ensure columns are numeric where needed
-  result_df$Longitude <- as.numeric(result_df$Longitude)
-  result_df$Latitude <- as.numeric(result_df$Latitude)
-  result_df$Counts <- as.numeric(result_df$Counts)
-  
-  data(adworld)
-    KnowB(data = result_df,
-          format="A",
-          cell=30,
-          curve= "Exponential",
-          estimator=1,
-          cutoff=0.01,
-          cutoffCompleteness= 0.01,
-          cutoffSlope= 1,
-          largematrix=FALSE, 
-          Area="World", 
-          save="RData",
-          file4=paste0("Completeness/Main30exp/Estimators_", var))
-  }
-  
-  # Cargar archivos por familia fuera del loop
-  for (var in families) {
-  load(paste0("Completeness/Main30exp/Estimators_", var, ".RData"))
-  values$Family <- var
-  all_estimators[[var]] <- values
-  }
-  
-  # Bind rows and save
-  EstimatorsAllFamilies <- bind_rows(all_estimators)
-  save(EstimatorsAllFamilies, file="Completeness/Main30exp/EstimatorsAllFamilies.RData")
-  
-  
-  # Run this to create all the outputs
-  neotropical_epyphites_completeness <- result_df
-  data(adworld)
-  KnowB(data = neotropical_epyphites_completeness,
-        format="A",
-        cell=30,
-        curve= "Exponential",
-        estimator=1,
-        cutoff=0.01,
-        cutoffCompleteness= 0.01,
-        cutoffSlope= 1,
-        largematrix=FALSE, 
-        Area="World", 
-        colbg="transparent",
-        colcon="transparent", 
-        colf="black",
-        pro=TRUE,
-        inc=0.005,
-        exclude=NULL,
-        colexc=NULL,
-        colfexc="black",
-        colscale=c("#C8FFFFFF","#64FFFFFF","#00FFFFFF","#64FF64FF","#C8FF00FF"
-                   ,"#FFFF00FF","#FFC800FF","#FF6400FF","#FF0000FF"),
-        legend.pos="y", breaks=9, xl=0, xr=0, yb=0, yt=0, lab=NULL, xlab="Longitude",
-        ylab="Latitude", main1="Observed richness", main2="Records", main3="Completeness",
-        main4="Slope", cex.main=1.6, cex.lab=1.4, cex.axis=1.2, cex.legend=1.2,
-        family="sans", font.main=2, font.lab=1, font.axis=1, lwdP=0.6, lwdC=0.1,
-        trans=c(1,1), log=c(0,0), ndigits=0, save="RData",
         file1="Completeness/Main30exp/Observed richness",
         file2="Completeness/Main30exp/List of species", 
         file3="Completeness/Main30exp/Species per site", 
@@ -167,12 +75,75 @@ output: html_document
         jpg4="Completeness/Main30exp/Slope.jpg",
         cex=1.5, pch=15, cex.labels=1.5, pchcol="red", ask=FALSE)
   
+  # Initialize a list to store results for all families
+  all_estimators <- list()
   
+  # Load the saved estimators for all families
+  load("Completeness/Main30exp/Estimators.RData")
+  Estimators <- values
+  
+  # Add a column to specify the family or if is for all combined
+  Estimators$Family <- "All_Families"
+  all_estimators[["All_Families"]] <- Estimators
+  
+  # Define families of interest for individual analysis
+  families <- c("Orchidaceae", "Bromeliaceae", "Araceae", "Piperaceae", "Polypodiaceae")
+  
+  
+  # Run completeness analysis for each family individually
+  for (var in families) {
+    
+      # Filter data for the current family
+    family_data <- clean_data %>% filter(Family == var)
+    
+    # Combine into a matrix
+    result_matrix <- cbind(Species = family_data$Species, 
+                           Longitude = family_data$Longitude, 
+                           Latitude = family_data$Latitude, 
+                           Counts = family_data$Counts, 
+                           Family = family_data$Family)
+  
+  # Convert the matrix to a data frame
+  result_df <- as.data.frame(result_matrix)
+  
+  # Ensure numeric columns are properly formatted
+  result_df$Longitude <- as.numeric(result_df$Longitude)
+  result_df$Latitude <- as.numeric(result_df$Latitude)
+  result_df$Counts <- as.numeric(result_df$Counts)
+  
+  # Run completeness analysis for the current family
+  data(adworld)
+    KnowB(data = result_df,
+          format="A",
+          cell=30,
+          curve= "Exponential",
+          estimator=1,
+          cutoff=0.01,
+          cutoffCompleteness= 0.01,
+          cutoffSlope= 1,
+          largematrix=FALSE, 
+          Area="World", 
+          save="RData",
+          file4=paste0("Completeness/Main30exp/Estimators_", var))
+  }
+  
+  # Load saved estimators for each family and store in the list
+  for (var in families) {
+  load(paste0("Completeness/Main30exp/Estimators_", var, ".RData"))
+  values$Family <- var
+  all_estimators[[var]] <- values
+  }
+  
+  # Combine all family results into a single data frame and save
+  EstimatorsAllFamilies <- bind_rows(all_estimators)
+  save(EstimatorsAllFamilies, file="Completeness/Main30exp/EstimatorsAllFamilies.RData")
+  
+
 
 
    load("Completeness/Main30exp/Estimators.RData")
  
-   
+   # Generate polar coordinate plots and save results
   SurveyQ(values, Longitude=values$Longitude, Latitude=values$Latitude, cell=30, Areas=NULL,
           variables=c("Slope","Completeness","Ratio"), completeness=c(50,90),
           slope=c(0.02,0.3), ratio=c(3,15), shape=NULL, shapenames=NULL,
@@ -191,13 +162,15 @@ output: html_document
 Process completeness
 
 ```{r}
-
+     # Load completeness estimators data
      data="Completeness/Main30exp/Estimators.RData"
 
      load(data)
      
+     # Load country boundaries for mapping
      roads <- rnaturalearth::ne_countries(scale = 110,returnclass = "sf")
      
+     # Process completeness data into categories
      datos <- values %>% as_tibble() %>%
        mutate(CompSlope = cut(Slope,breaks=c(0,0.02,0.1,0.3,1),labels=c("High","Fair","Insufficient","Poor"))) %>% 
        mutate(CompComp = cut(Completeness,breaks=c(0,50,75,90,100),labels=c("Poor","Insufficient","Fair","High"))) %>% 
@@ -209,13 +182,15 @@ Process completeness
        mutate(Category = ifelse(CompSlope=="Poor" & CompComp=="Poor" & CompRatio=="Poor","Poor",Category)) %>% 
        mutate(Category = ifelse(is.na(Category),"Poor",Category))
      
+     # Calculate total number of records
      datos %>% summarise(n=sum(Records)) %>% pull(n) -> final
      
+     # Convert Category to a factor with specific levels
      datos <- datos %>% mutate(Category= factor(Category,levels=c("High","Fair","Insufficient","Poor")))
      
      
      
-     
+     # Create a map visualization
      ggplot() +
        geom_sf(data=roads,colour=NA,fill=adjustcolor(MetBrewer::met.brewer("Demuth",direction=-1)[1],alpha.f = 0.2),size=0.5) + xlim(c(-120, -30)) + ylim(-55, 30) + 
        theme(panel.background = element_blank(),panel.grid = element_blank(),axis.text = element_blank(),axis.ticks = element_blank(),panel.border = element_rect(fill=NA),legend.position = c(-.2,0.3),legend.background = element_rect(fill = NA),legend.key.size = unit(0.7, "cm"),legend.key.width = unit(0.6,"cm"),legend.text = element_text(family="EB Garamond",size=8),legend.title = element_text(family="EB Garamond"),legend.spacing = unit(0.1,"cm"),plot.title = element_text(family="EB Garamond",face="bold",size=18,hjust = 0.5),plot.subtitle = element_text(family="EB Garamond",size=12,hjust = 0.5)) +
@@ -230,7 +205,7 @@ Process completeness
       save(datos,file = here("interim/KnowB_datos.Rdata"))
 ```
 
-
+Repeating the steps of this chunk in the next
 
 
 For countrys 15 arc minutes
@@ -281,7 +256,24 @@ load("output/pams_for_completeness_v2.Rdata")
       pro=TRUE,
       inc=0.005,
       save="RData",
-      file4="Completeness/Main15exp/Estimators")
+        file1="Completeness/Main15exp/Observed richness",
+        file2="Completeness/Main15exp/List of species", 
+        file3="Completeness/Main15exp/Species per site", 
+        file4="Completeness/Main15exp/Estimators",
+        file5="Completeness/Main15exp/Species per record", 
+        file6="Completeness/Main15exp/Records", 
+        file7="Completeness/Main15exp/Completeness", 
+        file8="Completeness/Main15exp/Slope",
+        file9="Completeness/Main15exp/Standard error of the estimators",
+        na="NA", 
+        dec=",", 
+        row.names=FALSE,
+        jpg=TRUE, 
+        jpg1="Completeness/Main15exp/Observed richness.jpg", 
+        jpg2="Completeness/Main15exp/Records.jpg", 
+        jpg3="Completeness/Main15exp/Completeness.jpg",
+        jpg4="Completeness/Main15exp/Slope.jpg",
+        cex=1.5, pch=15, cex.labels=1.5, pchcol="red", ask=FALSE)
   
   # list to store the results
   all_estimators <- list()
@@ -338,54 +330,6 @@ load("output/pams_for_completeness_v2.Rdata")
   # Bind rows and save
   EstimatorsAllFamilies <- bind_rows(all_estimators)
   save(EstimatorsAllFamilies, file="Completeness/Main15exp/EstimatorsAllFamilies.RData")
-  
-  
-  # Run this to create all the outputs
-  neotropical_epyphites_completeness <- result_df
-  data(adworld)
-  KnowB(data = neotropical_epyphites_completeness,
-        format="A",
-        cell=15,
-        curve= "Exponential",
-        estimator=1,
-        cutoff=0.01,
-        cutoffCompleteness= 0.01,
-        cutoffSlope= 1,
-        largematrix=FALSE, 
-        Area="World", 
-        colbg="transparent",
-        colcon="transparent", 
-        colf="black",
-        pro=TRUE,
-        inc=0.005,
-        exclude=NULL,
-        colexc=NULL,
-        colfexc="black",
-        colscale=c("#C8FFFFFF","#64FFFFFF","#00FFFFFF","#64FF64FF","#C8FF00FF"
-                   ,"#FFFF00FF","#FFC800FF","#FF6400FF","#FF0000FF"),
-        legend.pos="y", breaks=9, xl=0, xr=0, yb=0, yt=0, lab=NULL, xlab="Longitude",
-        ylab="Latitude", main1="Observed richness", main2="Records", main3="Completeness",
-        main4="Slope", cex.main=1.6, cex.lab=1.4, cex.axis=1.2, cex.legend=1.2,
-        family="sans", font.main=2, font.lab=1, font.axis=1, lwdP=0.6, lwdC=0.1,
-        trans=c(1,1), log=c(0,0), ndigits=0, save="RData",
-        file1="Completeness/Main15exp/Observed richness",
-        file2="Completeness/Main15exp/List of species", 
-        file3="Completeness/Main15exp/Species per site", 
-        file4="Completeness/Main15exp/Estimators",
-        file5="Completeness/Main15exp/Species per record", 
-        file6="Completeness/Main15exp/Records", 
-        file7="Completeness/Main15exp/Completeness", 
-        file8="Completeness/Main15exp/Slope",
-        file9="Completeness/Main15exp/Standard error of the estimators",
-        na="NA", 
-        dec=",", 
-        row.names=FALSE,
-        jpg=TRUE, 
-        jpg1="Completeness/Main15exp/Observed richness.jpg", 
-        jpg2="Completeness/Main15exp/Records.jpg", 
-        jpg3="Completeness/Main15exp/Completeness.jpg",
-        jpg4="Completeness/Main15exp/Slope.jpg",
-        cex=1.5, pch=15, cex.labels=1.5, pchcol="red", ask=FALSE)
   
   
 

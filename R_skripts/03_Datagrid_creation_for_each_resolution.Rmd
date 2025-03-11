@@ -8,60 +8,85 @@ output: html_document
 # Grid creation for completeness analysis
 
 ```{r}
+# Set encoding to UTF-8 for proper character handling
 getOption('encoding')
 options(locale = locale(encoding = "UTF-8"))
 
-  data="data/occ_epIGbackbone.Rdata"
-  #data="output/Joined_finalPOWdist.v2.Rdata" 
-  wgsrpd = "level2/level2.shp"
-  #projection = "+proj=longlat +datum=WGS84 +ellps=WGS84 +towgs84=0,0,0" # ORIGINAL
-  projection ="+proj=laea +lat_0=-10 +lon_0=-71 +x_0=0 +y_0=0 +a=6370997 +b=6370997 +units=m +no_defs"
+# Define file paths and projection settings
+
+  data="data/occ_epIGbackbone.Rdata"# Input data file
+  wgsrpd = "level2/level2.shp"# Shapefile for WGSRPD regions
+  projection ="+proj=laea +lat_0=-10 +lon_0=-71 +x_0=0 +y_0=0 +a=6370997 +b=6370997 +units=m +no_defs" # Custom projection
+  
+  
+  # Load data and prepare species column
   load(data)
   some <- aa
   colnames(some)[colnames(some) == "species"] <- "Accepted_Name"
+  
+  # Load and transform WGSRPD shapefile
   poly <- rgdal::readOGR(here("wgsrpd-master",wgsrpd))%>%
- # crop(., extent(-116.718889, -26.718889, -52.482778, 34.307222)) %>%
-  spTransform(., CRS(projection))
+  spTransform(., CRS(projection))# Reproject shapefile
  
-    
+ 
+  # Filter polygons for specific regions   
   poly <- poly[poly$LEVEL2_NAM %in% c("Mexico","Central America","Caribbean","Northern South America","Western South America","Brazil","Southern South America"),] 
+  
+  # Create buffered polygons for each region
   spList = vector("list", length(poly))
   for (i in 1:length(poly)) {
     cat(i,"\r")
-    a <- rgeos::gBuffer(poly[i,], width = 0.5)
+    a <- rgeos::gBuffer(poly[i,], width = 0.5)  # Add buffer to polygons
     a$LEVEL2_COD = poly[i,]$LEVEL2_COD
     a$LEVEL2_NAM = poly[i,]$LEVEL2_NAM
     spList[[i]] <- a
   }
-  poly <- do.call("rbind", spList)
   
-  #### ONE DEGREE
+  poly <- do.call("rbind", spList)# Combine buffered polygons
+  
+  
+  #### ONE DEGREE GRID
   g <- raster::raster(nrows=180*1,ncols=360*1,xmn=-180,xmx=180,ymn=-90,ymx=90,vals=1) 
 
   g[] <- runif(ncell(g))
   crs(g) <- "+proj=laea +lat_0=-10 +lon_0=-71 +x_0=0 +y_0=0 +a=6370997 +b=6370997 +units=m +no_defs"
   projection(g)
 
- g <-  as(g, 'SpatialPixels')
+ g <-  as(g, 'SpatialPixels') # Convert to SpatialPixels
 
-
+# Map species occurrences to 1-degree grid
   some %>% select(decimalLongitude,decimalLatitude) %>% 
-    sf::st_as_sf(x = ., coords = c("decimalLongitude", "decimalLatitude"), crs = "+proj=laea +lat_0=-10 +lon_0=-71 +x_0=0 +y_0=0 +a=6370997 +b=6370997 +units=m +no_defs") %>% sf::st_transform(.,crs = proj4string(g)) %>%  sf::st_coordinates() %>% SpatialPoints(.,proj4string= CRS(projection)) %>% sp::over(.,g) %>% enframe(.,name="name") %>% rename_with(.,~all_of(c("name","CellID_1d"))) %>% select(CellID_1d) %>% bind_cols(.,some) -> gridded
+    sf::st_as_sf(x = ., coords = c("decimalLongitude", "decimalLatitude"), crs = "+proj=laea +lat_0=-10 +lon_0=-71 +x_0=0 +y_0=0 +a=6370997 +b=6370997 +units=m +no_defs") %>%
+    sf::st_transform(.,crs = proj4string(g)) %>%
+    sf::st_coordinates() %>% SpatialPoints(.,proj4string= CRS(projection)) %>% sp::over(.,g) %>%
+    enframe(.,name="name") %>%
+    rename_with(.,~all_of(c("name","CellID_1d"))) %>%
+    select(CellID_1d) %>%
+    bind_cols(.,some) -> gridded
   
+  # Extract grid coordinates and assign region information
   g@coords %>% as_tibble() %>% mutate(CellID_1d=1:nrow(.)) -> coords
   pointos <- coords %>% select(1:2) %>% as.data.frame(.) %>% SpatialPoints(.)
   proj4string(pointos) <- projection
   points_powo <- sp::over(pointos,poly) %>% as_tibble()
   coords %<>% bind_cols(.,points_powo)
   
-  gridded %>%  filter(!is.na(Accepted_Name)) %>% select(CellID_1d,Accepted_Name,family) %>% group_by(CellID_1d,Accepted_Name,family) %>% summarize(Counts=n()) %>% ungroup() %>% left_join(.,coords,by="CellID_1d") -> one_degree
+  # Aggregate species counts per 1-degree grid cell
+  gridded %>%  filter(!is.na(Accepted_Name)) %>%
+    select(CellID_1d,Accepted_Name,family) %>%
+    group_by(CellID_1d,Accepted_Name,family) %>% summarize(Counts=n()) %>%
+    ungroup() %>% left_join(.,coords,by="CellID_1d") -> one_degree
   
+  # Clean species names and prepare final 1-degree dataset
   one_degree %<>% mutate(binomial_accepted=Accepted_Name) %>% mutate(binomial_accepted=sub("× ","",binomial_accepted))
   one_degree %<>% mutate(binomial_accepted=sub(" ","_",binomial_accepted))
   one_degree %<>% separate(binomial_accepted,into=c("binomial"),extra = "warn",sep=" ")
   one_degree
   one_degree %<>% ungroup() %>%  select(binomial,x,y,Counts,LEVEL2_NAM,family) %>% 
     rename("Species"=binomial,"Longitude"=x,"Latitude"=y)
+  
+  # Repeat the process for 0.5-degree, 0.25-degree, and 0.06-degree grids
+  
   
   ### HALF DEGREE
   g <- raster::raster(nrows=180*2,ncols=360*2,xmn=-180,xmx=180,ymn=-90,ymx=90,vals=1) 
@@ -73,7 +98,13 @@ options(locale = locale(encoding = "UTF-8"))
  g <-  as(g, 'SpatialPixels')
 
   gridded %>% select(decimalLongitude,decimalLatitude) %>% 
-    sf::st_as_sf(x = ., coords = c("decimalLongitude", "decimalLatitude"), crs = "+proj=laea +lat_0=-10 +lon_0=-71 +x_0=0 +y_0=0 +a=6370997 +b=6370997 +units=m +no_defs") %>% sf::st_transform(.,crs = proj4string(g)) %>%  sf::st_coordinates() %>% SpatialPoints(.,proj4string= CRS(projection)) %>% sp::over(.,g) %>% enframe(.,name="name") %>% rename_with(.,~all_of(c("name","CellID_0.5d"))) %>% select(CellID_0.5d) %>% bind_cols(.,gridded) -> gridded
+    sf::st_as_sf(x = ., coords = c("decimalLongitude", "decimalLatitude"), crs = "+proj=laea +lat_0=-10 +lon_0=-71 +x_0=0 +y_0=0 +a=6370997 +b=6370997 +units=m +no_defs") %>%
+    sf::st_transform(.,crs = proj4string(g)) %>% 
+    sf::st_coordinates() %>% SpatialPoints(.,proj4string= CRS(projection)) %>%
+    sp::over(.,g) %>% enframe(.,name="name") %>%
+    rename_with(.,~all_of(c("name","CellID_0.5d"))) %>%
+    select(CellID_0.5d) %>% bind_cols(.,gridded) -> gridded
+  
   
   g@coords %>% as_tibble() %>% mutate(CellID_0.5d=1:nrow(.)) -> coords
   pointos <- coords %>% select(1:2) %>% as.data.frame(.) %>% SpatialPoints(.)
@@ -81,7 +112,11 @@ options(locale = locale(encoding = "UTF-8"))
   points_powo <- sp::over(pointos,poly) %>% as_tibble()
   coords %<>% bind_cols(.,points_powo)
   
-  gridded %>% filter(!is.na(Accepted_Name)) %>%select(CellID_0.5d,Accepted_Name,family) %>% group_by(CellID_0.5d,Accepted_Name,family) %>% summarize(Counts=n()) %>% ungroup() %>% right_join(.,coords,by="CellID_0.5d") -> half_degree
+  gridded %>% filter(!is.na(Accepted_Name)) %>%
+    select(CellID_0.5d,Accepted_Name,family) %>%
+    group_by(CellID_0.5d,Accepted_Name,family) %>%
+    summarize(Counts=n()) %>% ungroup() %>%
+    right_join(.,coords,by="CellID_0.5d") -> half_degree
   
   half_degree %<>% mutate(binomial_accepted=Accepted_Name) %>% mutate(binomial_accepted=sub("× ","",binomial_accepted))
   half_degree %<>% mutate(binomial_accepted=sub(" ","_",binomial_accepted))
@@ -104,7 +139,13 @@ options(locale = locale(encoding = "UTF-8"))
 
 
   gridded %>% select(decimalLongitude,decimalLatitude) %>% 
-    sf::st_as_sf(x = ., coords = c("decimalLongitude", "decimalLatitude"), crs = "+proj=laea +lat_0=-10 +lon_0=-71 +x_0=0 +y_0=0 +a=6370997 +b=6370997 +units=m +no_defs") %>% sf::st_transform(.,crs = proj4string(g)) %>%  sf::st_coordinates() %>% SpatialPoints(.,proj4string= CRS(projection)) %>% sp::over(.,g) %>% enframe(.,name="name") %>% rename_with(.,~all_of(c("name","CellID_0.2d"))) %>% select(CellID_0.2d) %>% bind_cols(.,gridded) -> gridded
+    sf::st_as_sf(x = ., coords = c("decimalLongitude", "decimalLatitude"), crs = "+proj=laea +lat_0=-10 +lon_0=-71 +x_0=0 +y_0=0 +a=6370997 +b=6370997 +units=m +no_defs") %>%
+    sf::st_transform(.,crs = proj4string(g)) %>%
+    sf::st_coordinates() %>% SpatialPoints(.,proj4string= CRS(projection)) %>%
+    sp::over(.,g) %>% enframe(.,name="name") %>% 
+    rename_with(.,~all_of(c("name","CellID_0.2d"))) %>%
+    select(CellID_0.2d) %>% bind_cols(.,gridded) -> gridded
+  
   
   g@coords %>% as_tibble() %>% mutate(CellID_0.2d=1:nrow(.)) -> coords
   pointos <- coords %>% select(1:2) %>% as.data.frame(.) %>% SpatialPoints(.)
@@ -112,7 +153,10 @@ options(locale = locale(encoding = "UTF-8"))
   points_powo <- sp::over(pointos,poly) %>% as_tibble()
   coords %<>% bind_cols(.,points_powo)
   
-  gridded %>% filter(!is.na(Accepted_Name)) %>%select(CellID_0.2d,Accepted_Name,family) %>% group_by(CellID_0.2d,Accepted_Name,family) %>% summarize(Counts=n()) %>% ungroup() %>% right_join(.,coords,by="CellID_0.2d") -> fifth_degree
+  gridded %>% filter(!is.na(Accepted_Name)) %>%
+    select(CellID_0.2d,Accepted_Name,family) %>% 
+    group_by(CellID_0.2d,Accepted_Name,family) %>% summarize(Counts=n()) %>% 
+    ungroup() %>% right_join(.,coords,by="CellID_0.2d") -> fifth_degree
   
   fifth_degree %<>% mutate(binomial_accepted=Accepted_Name) %>% mutate(binomial_accepted=sub("× ","",binomial_accepted))
   fifth_degree %<>% mutate(binomial_accepted=sub(" ","_",binomial_accepted))
@@ -133,7 +177,12 @@ options(locale = locale(encoding = "UTF-8"))
 
   
   gridded %>% select(decimalLongitude,decimalLatitude) %>% 
-    sf::st_as_sf(x = ., coords = c("decimalLongitude", "decimalLatitude"), crs = "+proj=laea +lat_0=-10 +lon_0=-71 +x_0=0 +y_0=0 +a=6370997 +b=6370997 +units=m +no_defs") %>% sf::st_transform(.,crs = proj4string(g)) %>%  sf::st_coordinates() %>% SpatialPoints(.,proj4string= CRS(projection)) %>% sp::over(.,g) %>% enframe(.,name="name") %>% rename_with(.,~all_of(c("name","CellID_0.1d"))) %>% select(CellID_0.1d) %>% bind_cols(.,gridded) -> gridded
+    sf::st_as_sf(x = ., coords = c("decimalLongitude", "decimalLatitude"), crs = "+proj=laea +lat_0=-10 +lon_0=-71 +x_0=0 +y_0=0 +a=6370997 +b=6370997 +units=m +no_defs") %>%
+    sf::st_transform(.,crs = proj4string(g)) %>%
+    sf::st_coordinates() %>% SpatialPoints(.,proj4string= CRS(projection)) %>%
+    sp::over(.,g) %>% enframe(.,name="name") %>%
+    rename_with(.,~all_of(c("name","CellID_0.1d"))) %>% select(CellID_0.1d) %>%
+    bind_cols(.,gridded) -> gridded
   
   g@coords %>% as_tibble() %>% mutate(CellID_0.1d=1:nrow(.)) -> coords
   pointos <- coords %>% select(1:2) %>% as.data.frame(.) %>% SpatialPoints(.)
@@ -141,7 +190,11 @@ options(locale = locale(encoding = "UTF-8"))
   points_powo <- sp::over(pointos,poly) %>% as_tibble()
   coords %<>% bind_cols(.,points_powo)
   
-  gridded %>% filter(!is.na(Accepted_Name)) %>% select(CellID_0.1d,Accepted_Name,family) %>% group_by(CellID_0.1d,Accepted_Name,family) %>% summarize(Counts=n()) %>% ungroup() %>% right_join(.,coords,by="CellID_0.1d") -> tenth_degree
+  gridded %>% filter(!is.na(Accepted_Name)) %>%
+    select(CellID_0.1d,Accepted_Name,family) %>% 
+    group_by(CellID_0.1d,Accepted_Name,family) %>%
+    summarize(Counts=n()) %>% ungroup() %>%
+    right_join(.,coords,by="CellID_0.1d") -> tenth_degree
   
   tenth_degree %<>% mutate(binomial_accepted=Accepted_Name) %>% mutate(binomial_accepted=sub("× ","",binomial_accepted))
   tenth_degree %<>% mutate(binomial_accepted=sub(" ","_",binomial_accepted))
@@ -150,10 +203,11 @@ options(locale = locale(encoding = "UTF-8"))
   tenth_degree %<>% ungroup() %>%  select(binomial,x,y,Counts,LEVEL2_NAM,family) %>% 
     rename("Species"=binomial,"Longitude"=x,"Latitude"=y)
   
-  
+  # Combine all grid resolutions into a single list
   for_comp <- list(one_degree=one_degree,half_degree=half_degree,
                    fifth_degree=fifth_degree,tenth_degree=tenth_degree)
   
+  #Save dataset
   save(for_comp,file = here("output/pams_for_completeness_v2.Rdata"))
 
 ```
