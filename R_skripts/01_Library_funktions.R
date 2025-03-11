@@ -12,7 +12,8 @@ packages <- c("tidyverse", "magrittr", "sf", "spdep",
               "patchwork", "ape", "taxadb", "bdc",
               "UpSetR", "KnowBR", "vegan", "plotrix", 
               "viridis", "raster", "biscale", "fuzzyjoin", 
-              "openxlsx", "rworldmap", "WorldFlora")
+              "openxlsx", "rworldmap", "WorldFlora","stars","terra")
+
 
 # Install missing packages 
 installed_packages <- packages %in% rownames(installed.packages())
