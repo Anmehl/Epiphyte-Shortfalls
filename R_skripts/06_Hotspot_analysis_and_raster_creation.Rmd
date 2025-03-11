@@ -1,0 +1,329 @@
+---
+title: "Map Hotspots"
+author: "Andreas Mehl"
+date: "2024-12-21"
+output: html_document
+---
+
+```{r}
+
+
+  require(spdep)
+  data = "Allmetrics_30.Rdata"
+  ###select all var one after each run to create rasters of the according var
+  var = "Completeness" 
+  #var = "Slope"
+  #var = "Richness"
+  #var = "SR"
+  resolution = 30#resolution of data table used other options are 60,30,5
+  distance = 75
+  threshold = 1.96# for deciding if spot is hot or cold with 95% probability of beeing correct (F. Rossi & G. Becker (2019))
+  
+  counts <- rnaturalearth::ne_coastline(scale = 10,returnclass = "sf") %>% sf::st_transform(., crs = CRS("+proj=longlat +datum=WGS84 +ellps=WGS84 +towgs84=0,0,0"))
+  
+  xlimits = c(-115,-20)
+  
+  ylimits = c(-50,35)
+  
+  nombre = paste0("Spots",var,"_",resolution,".tiff")#name of the file saved
+  
+  load(here("interim",data))
+  
+  datos %<>% mutate(SR = SR, Richness= Richness, Slope =1 - Slope,
+                    Completeness = 100 - Completeness)# mutating values to create accurate hot and coldspots representation
+  datos <- datos[!is.na(datos[[glue::glue('{var}')]]),]
+  datos <- datos[!is.na(datos[["x"]]),]
+  
+  
+  nb <- dnearneigh(as.matrix(datos[,c("x","y")]),0,distance,longlat = TRUE)
+  aver <- localG(datos[[glue::glue('{var}')]],nb2listw(nb,style = "B",zero.policy=TRUE))
+  #####LocalG calculated here to decide if data is a hot or cold spot####
+  datos$localG <- as.vector(aver)
+  datos %>% mutate(spots = ifelse(localG >= threshold,"HC",ifelse(localG <= -threshold,"HC","N"))) %>%   
+      
+    ggplot(aes(x=x,y=y,color=localG,alpha=spots)) +
+    scale_alpha_discrete(range=c(1,0.0)) +
+    geom_point(size=0.65) +
+    
+    scale_color_stepsn(colors=(MetBrewer::met.brewer("Hiroshige",direction=-1)),n.breaks=20,name="local G",limits=c(-5,5)) +
+    theme(panel.background = element_blank(),
+          axis.line = element_blank(),
+          legend.position = c(0.2,0.3),
+          axis.ticks=element_blank(),
+          legend.background = element_blank(),
+          legend.key.size = unit(0.7, "cm"),legend.key.width = unit(0.6,"cm"),
+          legend.text = element_text(family="EB Garamond",size=8),
+          legend.title = element_text(family="EB Garamond"),
+          legend.key = element_rect(fill="transparent"),
+          legend.spacing = unit(0.1,"cm"),
+          legend.box.background = element_blank(),
+          axis.text = element_blank(),
+          axis.title = element_blank(),
+          plot.title = element_text(family="EB Garamond",face="bold",size=20,hjust = 0.5),
+          plot.subtitle = element_text(family="EB Garamond",size=12,hjust = 0.5)) + 
+    geom_sf(data=counts,colour="black",fill=NA,size=0.1,alpha=0.5,inherit.aes = FALSE) +
+    xlim(xlimits) + ylim(ylimits) + 
+    guides(alpha="none") +
+    NULL
+#ggsave(filename = here("figures",nombre),last_plot()) #save hotspot plot with this, or export via R Studio
+  
+  #change crop_extend acording to the range you want to use for the raster (full area of occurrences)
+  xlimits = c(-115,-20)
+  ylimits = c(-50,35)
+  crop_extent <- extent(xlimits[1], xlimits[2], ylimits[1], ylimits[2])
+  
+  #saves a Raster.tif for the acoring var specified above
+  
+  base <- raster("data/base_rasters/baseRaster_30.tif")
+  load("data/base_extent.r")
+  prefix = paste0("raster",resolution,"_",var,".tif")
+  rasterize(datos[,c("x","y")],base,field=datos[[glue::glue("{var}")]]) %>% crop(crop_extent) %>%
+    #crop(.,extent(x)) %>%
+    writeRaster(.,filename = here("output",prefix),overwrite=TRUE)
+  prefix = paste0("raster",resolution,"_",var,"G",".tif")
+  if(length(which(is.na(datos$localG))!=0)) {datos$localG[which(is.na(datos$localG))] <- -999}
+  rasterize(datos[,c("x","y")],base,field=datos$localG) %>% crop(crop_extent) %>%
+    #crop(.,extent(x)) %>% 
+    writeRaster(.,filename = here("output",prefix),overwrite=TRUE)#overwrite true to overwrite prev file
+  # prefix = paste0("raster",resolution,"_","Slope",".tif")#create slope raster
+  # rasterize(datos[,c("x","y")],base,field=datos$Slope) %>% crop(crop_extent) %>%
+  #   #crop(.,extent(x)) %>%  
+  #   writeRaster(.,filename = here("output",prefix),overwrite=FALSE)#change to TRUE if you want to create a new file
+  
+
+```
+
+
+Putting all rasters together
+
+```{r setup, include=FALSE}
+require(spdep)
+require(sf)
+require(stars)
+require(dplyr)
+require(terra)
+
+# Parameters
+variables <- c("Completeness", "Slope", "Richness", "SR")
+resolution <- 30
+xlimits <- c(-115, -20)
+ylimits <- c(-50, 35)
+crop_extent <- ext(xlimits[1], xlimits[2], ylimits[1], ylimits[2])
+
+# Base raster
+base <- rast("data/base_rasters/baseRaster_30.tif")
+load("data/base_extent.r")
+
+# Load data
+load(here("interim", "Allmetrics_30.Rdata"))
+
+# Preprocessing
+datos <- datos %>% mutate(Slope = 1 - Slope, Completeness = 100 - Completeness)
+
+# Store results in a list
+raster_list <- list()
+
+for (var in variables) {
+  cat("Processing", var, "\n")
+  datos_var <- datos[!is.na(datos[[var]]) & !is.na(datos$x), ]
+  
+  # Neighbors matrix and LocalG calculation
+  nb <- dnearneigh(as.matrix(datos_var[, c("x", "y")]), 0, 75, longlat = TRUE)
+  datos_var[[paste0(var, "G")]] <- as.vector(localG(datos_var[[var]], nb2listw(nb, style = "B", zero.policy = TRUE)))
+  
+  # Handling NA values
+  datos_var[[paste0(var, "G")]][is.na(datos_var[[paste0(var, "G")]])] <- -999
+  
+  # Convert data to SpatVector and rasterize
+  points_sf <- vect(datos_var, geom = c("x", "y"), crs = crs(base))
+  raster_G <- rasterize(points_sf, base, field = paste0(var, "G")) %>% crop(crop_extent)
+  
+  # Convert to sf
+  df_sf <- st_as_sf(st_as_stars(raster_G), as_points = TRUE) %>% rename(!!paste0(var, "G") := 1)
+  
+  raster_list[[var]] <- df_sf
+}
+
+# Merge all sf into one
+sf_final <- Reduce(function(x, y) st_join(x, y), raster_list)
+sf_final <- sf_final %>% mutate(cellID = row_number())
+
+# Clasify hotspots and coldspots
+sf_final <- sf_final %>%
+  mutate(
+    Slope_class = case_when(
+      get("SlopeG") > 1.96 ~ "Hotspot",
+      get("SlopeG") < -1.96 ~ "Coldspot",
+      TRUE ~ "Neutral"
+    ),
+    Completeness_class = case_when(
+      get("CompletenessG") > 1.96 ~ "Hotspot",
+      get("CompletenessG") < -1.96 ~ "Coldspot",
+      TRUE ~ "Neutral"
+    )
+  )
+
+save(sf_final, file = "output/sf_Hotspots_30.Rdata")
+```
+
+
+
+for countrys 15 arc minutes
+```{r}
+
+
+  require(spdep)
+  data = "Allmetrics_15.Rdata"
+  ###select all var one after each run to create rasters of the according var
+  var = "Completeness" 
+  #var = "Slope"
+  #var = "Richness"
+  #var = "SR"
+  resolution = 15#resolution of data table used other options are 60,30,15,6
+  distance = 75
+  threshold = 1.96# for deciding if spot is hot or cold with 95% probability of being correct (F. Rossi & G. Becker (2019))
+  
+  counts <- rnaturalearth::ne_coastline(scale = 10,returnclass = "sf") %>% sf::st_transform(., crs = CRS("+proj=longlat +datum=WGS84 +ellps=WGS84 +towgs84=0,0,0"))
+  
+  xlimits = c(-115,-20)
+  
+  ylimits = c(-50,35)
+  
+  nombre = paste0("Spots",var,"_",resolution,".tiff")#name of the file saved
+  
+  load(here("interim",data))
+  
+  datos %<>% mutate(SR = SR, Richness= Richness, Slope =1 - Slope,
+                    Completeness = 100 - Completeness)# mutating values to create accurate hot and coldspots representation
+  datos <- datos[!is.na(datos[[glue::glue('{var}')]]),]
+  datos <- datos[!is.na(datos[["x"]]),]
+  
+  
+  nb <- dnearneigh(as.matrix(datos[,c("x","y")]),0,distance,longlat = TRUE)
+  aver <- localG(datos[[glue::glue('{var}')]],nb2listw(nb,style = "B",zero.policy=TRUE))
+  #####LocalG calculated here to decide if data is a hot or cold spot####
+  datos$localG <- as.vector(aver)
+  datos %>% mutate(spots = ifelse(localG >= threshold,"HC",ifelse(localG <= -threshold,"HC","N"))) %>%   
+      
+    ggplot(aes(x=x,y=y,color=localG,alpha=spots)) +
+    scale_alpha_discrete(range=c(1,0.0)) +
+    geom_point(size=0.65) +
+    
+    scale_color_stepsn(colors=(MetBrewer::met.brewer("Hiroshige",direction=-1)),n.breaks=20,name="local G",limits=c(-5,5)) +
+    theme(panel.background = element_blank(),
+          axis.line = element_blank(),
+          legend.position = c(0.2,0.3),
+          axis.ticks=element_blank(),
+          legend.background = element_blank(),
+          legend.key.size = unit(0.7, "cm"),legend.key.width = unit(0.6,"cm"),
+          legend.text = element_text(family="EB Garamond",size=8),
+          legend.title = element_text(family="EB Garamond"),
+          legend.key = element_rect(fill="transparent"),
+          legend.spacing = unit(0.1,"cm"),
+          legend.box.background = element_blank(),
+          axis.text = element_blank(),
+          axis.title = element_blank(),
+          plot.title = element_text(family="EB Garamond",face="bold",size=20,hjust = 0.5),
+          plot.subtitle = element_text(family="EB Garamond",size=12,hjust = 0.5)) + 
+    geom_sf(data=counts,colour="black",fill=NA,size=0.1,alpha=0.5,inherit.aes = FALSE) +
+    xlim(xlimits) + ylim(ylimits) + 
+    guides(alpha="none") +
+    NULL
+#ggsave(filename = here("figures",nombre),last_plot()) #save hotspot plot with this, or export via R Studio
+  
+  #change crop_extend acording to the range you want to use for the raster (full area of occurrences)
+  xlimits = c(-115,-20)
+  ylimits = c(-50,35)
+  crop_extent <- extent(xlimits[1], xlimits[2], ylimits[1], ylimits[2])
+  
+  #saves a Raster.tif for the acoring var specified above
+  
+  base <- raster("data/base_rasters/baseRaster_15.tif")
+  load("data/base_extent.r")
+  prefix = paste0("raster",resolution,"_",var,".tif")
+  rasterize(datos[,c("x","y")],base,field=datos[[glue::glue("{var}")]]) %>% crop(crop_extent) %>%
+    #crop(.,extent(x)) %>%
+    writeRaster(.,filename = here("output",prefix),overwrite=TRUE)
+  prefix = paste0("raster",resolution,"_",var,"G",".tif")
+  if(length(which(is.na(datos$localG))!=0)) {datos$localG[which(is.na(datos$localG))] <- -999}
+  rasterize(datos[,c("x","y")],base,field=datos$localG) %>% crop(crop_extent) %>%
+    #crop(.,extent(x)) %>% 
+    writeRaster(.,filename = here("output",prefix),overwrite=TRUE)#overwrite true to overwrite prev file
+  # prefix = paste0("raster",resolution,"_","Slope",".tif")#create slope raster
+  # rasterize(datos[,c("x","y")],base,field=datos$Slope) %>% crop(crop_extent) %>%
+  #   #crop(.,extent(x)) %>%  
+  #   writeRaster(.,filename = here("output",prefix),overwrite=FALSE)#change to TRUE if you want to create a new file
+  
+```
+
+Putting all rasters together for 15 arc minutes
+
+```{r}
+require(spdep)
+require(sf)
+require(stars)
+require(dplyr)
+require(terra)
+
+# Parameters
+variables <- c("Completeness", "Slope", "Richness", "SR")
+resolution <- 15
+xlimits <- c(-115, -20)
+ylimits <- c(-50, 35)
+crop_extent <- ext(xlimits[1], xlimits[2], ylimits[1], ylimits[2])
+
+# Base raster
+base <- raster("data/base_rasters/baseRaster_15.tif")
+load("data/base_extent.r")
+
+# Load data
+load(here("interim", "Allmetrics_15.Rdata"))
+
+# Preprocessing
+datos <- datos %>% mutate(Slope = 1 - Slope, Completeness = 100 - Completeness)
+
+# Store results in a list
+raster_list <- list()
+
+for (var in variables) {
+  cat("Processing", var, "\n")
+  datos_var <- datos[!is.na(datos[[var]]) & !is.na(datos$x), ]
+  
+  # Neighbors matrix and LocalG calculation
+  nb <- dnearneigh(as.matrix(datos_var[, c("x", "y")]), 0, 75, longlat = TRUE)
+  datos_var[[paste0(var, "G")]] <- as.vector(localG(datos_var[[var]], nb2listw(nb, style = "B", zero.policy = TRUE)))
+  
+  # Handling NA values
+  datos_var[[paste0(var, "G")]][is.na(datos_var[[paste0(var, "G")]])] <- -999
+  
+  # Convert data to SpatVector and rasterize
+  points_sf <- vect(datos_var, geom = c("x", "y"), crs = crs(base))
+  raster_G <- rasterize(points_sf, base, field = paste0(var, "G")) %>% crop(crop_extent)
+  
+  # Convert to sf
+  df_sf <- st_as_sf(st_as_stars(raster_G), as_points = TRUE) %>% rename(!!paste0(var, "G") := 1)
+  
+  raster_list[[var]] <- df_sf
+}
+
+# Merge all sf into one
+sf_final <- Reduce(function(x, y) st_join(x, y), raster_list)
+sf_final <- sf_final %>% mutate(cellID = row_number())
+
+# Clasify hotspots and coldspots
+sf_final <- sf_final %>%
+  mutate(
+    Slope_class = case_when(
+      get("SlopeG") > 1.96 ~ "Hotspot",
+      get("SlopeG") < -1.96 ~ "Coldspot",
+      TRUE ~ "Neutral"
+    ),
+    Completeness_class = case_when(
+      get("CompletenessG") > 1.96 ~ "Hotspot",
+      get("CompletenessG") < -1.96 ~ "Coldspot",
+      TRUE ~ "Neutral"
+    )
+  )
+
+save(sf_final, file = "output/sf_Hotspots_15.Rdata")
+```

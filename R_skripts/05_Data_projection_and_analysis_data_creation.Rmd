@@ -1,0 +1,290 @@
+---
+title: "calculate_grid_metrics"
+author: "Andreas Mehl"
+date: "2024-11-20"
+output: html_document
+---
+
+
+```{r}
+  # Estimate metrics per grid-cell
+
+     data ="data/occ_epIGbackbone.Rdata"
+     #data="Joined_finalPOWdist.v2.Rdata"
+    
+ 
+     
+     
+     resolution = 30#arc 15
+     
+    
+     data_comp="Completeness/Main30exp/Estimators.RData"
+     
+     projection = "+proj=laea +lat_0=-10 +lon_0=-71 +x_0=0 +y_0=0 +a=6370997 +b=6370997 +units=m +no_defs"  
+     
+   
+     
+     load(data)
+     #load(here("output",data))
+     some <- aa
+ 
+     
+     
+     wgsrpd = "level2/level2.shp"
+     
+     poly <- rgdal::readOGR(here("wgsrpd-master",wgsrpd))
+     
+     poly <- poly[poly$LEVEL2_NAM %in% c("Mexico","Central America","Caribbean","Northern South America","Western South America","Brazil","Southern South America"),]
+     
+      # poly<- spTransform(poly, CRS("+proj=laea +lat_0=-10 +lon_0=-71 +x_0=0 +y_0=0 +a=6370997 +b=6370997 +units=m +no_defs"))#add right projection to poly
+     # 
+     crs(poly) <- "+proj=laea +lat_0=-10 +lon_0=-71 +x_0=0 +y_0=0 +a=6370997 +b=6370997 +units=m +no_defs"
+  projection(poly)
+
+     spList = vector("list", length(poly))
+     
+     for (i in 1:length(poly)) {
+       cat(i,"\r")
+       a <- rgeos::gBuffer(poly[i,], width = 0.5)
+       a$LEVEL2_COD = poly[i,]$LEVEL2_COD
+       a$LEVEL2_NAM = poly[i,]$LEVEL2_NAM
+       spList[[i]] <- a
+     }
+     
+     poly <- do.call("rbind", spList)
+     
+    
+     
+     
+     
+     some %>% select(decimalLongitude,decimalLatitude) %>% sf::st_as_sf(x = ., coords = c("decimalLongitude", "decimalLatitude"), crs = "+proj=laea +lat_0=-10 +lon_0=-71 +x_0=0 +y_0=0 +a=6370997 +b=6370997 +units=m +no_defs") %>%  sf::st_coordinates() %>% SpatialPoints(.,proj4string= CRS(projection)) %>% sp::over(.,poly) %>% as_tibble() -> gridded
+     some <- gridded %>% bind_cols(some ,.)
+     
+     res <- 60/resolution
+     
+     g <- raster::raster(nrows=180*res,ncols=360*res,xmn=-180,xmx=180,ymn=-90,ymx=90,vals=1) 
+     
+     g[] <- runif(ncell(g))
+     crs(g) <- "+proj=laea +lat_0=-10 +lon_0=-71 +x_0=0 +y_0=0 +a=6370997 +b=6370997 +units=m +no_defs"
+     projection(g)
+
+     g <-  as(g, 'SpatialPixels')
+
+
+     
+     
+     some %>% select(decimalLongitude,decimalLatitude, scientificName, family) %>% 
+       sf::st_as_sf(x = ., coords = c("decimalLongitude", "decimalLatitude"), crs = "+proj=laea +lat_0=-10 +lon_0=-71 +x_0=0 +y_0=0 +a=6370997 +b=6370997 +units=m +no_defs") %>%
+       sf::st_transform(.,crs = proj4string(g)) %>%
+       sf::st_coordinates() %>%
+       SpatialPoints(.,proj4string= CRS(projection)) %>%
+       sp::over(.,g) %>%
+       enframe(.,name="name") %>%
+       rename_with(.,~all_of(c("name","CellID"))) %>%
+       select(CellID) %>%
+       bind_cols(.,some) -> gridded
+     
+     g@coords %>% as_tibble() %>% mutate(CellID=1:nrow(.)) -> coords
+     
+     pointos <- coords %>% select(1:2) %>% as.data.frame(.) %>% SpatialPoints(.)
+     
+     proj4string(pointos) <- projection
+     
+     points_powo <- sp::over(pointos,poly) %>% as_tibble()
+     
+     coords %<>% bind_cols(.,points_powo)
+     
+     # PROCESS THE DATA TO DO ALL THE ANALYSES:
+     #     - SPECIES RICHNESS
+     gridded %>%
+       select(scientificName,family,CellID) %>% 
+       filter(!is.na(scientificName)) %>% 
+       distinct(scientificName,family,CellID) %>%
+       count(CellID) %>% 
+       left_join(.,gridded %>% distinct(CellID,.keep_all = T),by="CellID") %>% 
+       select(CellID,n, scientificName, family) %>%
+       rename(SR=n) -> SR
+     
+     SR %<>% mutate(SR_std = (SR - min(SR,na.rm=TRUE)) / (max(SR,na.rm=TRUE) - min(SR,na.rm=TRUE)))
+     
+     #     - NUMBER OF RECORDS
+     gridded %>%
+       filter(!is.na(scientificName)) %>%
+       count(CellID) %>% 
+       left_join(.,gridded %>% distinct(CellID,.keep_all = T),by="CellID") %>%
+       select(CellID,n, scientificName, family) %>%
+       inner_join(.,SR,by="CellID") %>%
+       mutate(n_std = (n - min(n,na.rm=TRUE)) / (max(n,na.rm=TRUE) - min(n,na.rm=TRUE))) -> SR
+     
+     nombre <-  paste0("RichnessRecords_",resolution,".Rdata")
+     richness <- SR %>% left_join(.,coords,by="CellID")
+     richness %<>% 
+  select(-scientificName.x, -family.x) %>% 
+  rename(scientificName = scientificName.y, family = family.y)
+
+     save(richness,file=here("interim",nombre))
+     
+     SR <- richness
+     
+     
+     # - COMPLETENESS
+     load(data_comp)
+     
+     datos <- values %>% as_tibble()
+     
+     datos %>% select(Longitude,Latitude) %>% 
+       sf::st_as_sf(x = ., coords = c("Longitude", "Latitude"), crs = "+proj=laea +lat_0=-10 +lon_0=-71 +x_0=0 +y_0=0 +a=6370997 +b=6370997 +units=m +no_defs") %>% sf::st_transform(.,crs = proj4string(g)) %>%  sf::st_coordinates() %>% SpatialPoints(.,proj4string= CRS(projection)) %>% sp::over(.,g) %>% enframe(.,name="name") %>% rename_with(.,~all_of(c("name","CellID"))) %>% select(CellID) %>% bind_cols(.,datos) -> datos
+     
+     SR %<>% right_join(.,datos,by="CellID")
+     
+     datos <- SR
+     
+     nombre <-  paste0("Allmetrics_",resolution,".Rdata")
+     
+     save(datos,file=here("interim",nombre))
+    
+     
+   
+```
+
+for countrys 15 arc minutes
+```{r}
+# Estimate metrics per grid-cell
+
+     data ="data/occ_epIGbackbone.Rdata"
+     #data="Joined_finalPOWdist.v2.Rdata"
+    
+ 
+     
+     
+     resolution = 15#arc 15
+     
+    
+     data_comp="Completeness/Main15exp/Estimators.RData"
+     
+     projection = "+proj=laea +lat_0=-10 +lon_0=-71 +x_0=0 +y_0=0 +a=6370997 +b=6370997 +units=m +no_defs"  
+     
+   
+     
+     load(data)
+     #load(here("output",data))
+     some <- aa
+ 
+     
+     
+     wgsrpd = "level2/level2.shp"
+     
+     poly <- rgdal::readOGR(here("wgsrpd-master",wgsrpd))
+     
+     poly <- poly[poly$LEVEL2_NAM %in% c("Mexico","Central America","Caribbean","Northern South America","Western South America","Brazil","Southern South America"),]
+     
+      # poly<- spTransform(poly, CRS("+proj=laea +lat_0=-10 +lon_0=-71 +x_0=0 +y_0=0 +a=6370997 +b=6370997 +units=m +no_defs"))#add right projection to poly
+     # 
+     crs(poly) <- "+proj=laea +lat_0=-10 +lon_0=-71 +x_0=0 +y_0=0 +a=6370997 +b=6370997 +units=m +no_defs"
+  projection(poly)
+
+     spList = vector("list", length(poly))
+     
+     for (i in 1:length(poly)) {
+       cat(i,"\r")
+       a <- rgeos::gBuffer(poly[i,], width = 0.5)
+       a$LEVEL2_COD = poly[i,]$LEVEL2_COD
+       a$LEVEL2_NAM = poly[i,]$LEVEL2_NAM
+       spList[[i]] <- a
+     }
+     
+     poly <- do.call("rbind", spList)
+     
+    
+     
+     
+     
+     some %>% select(decimalLongitude,decimalLatitude) %>% sf::st_as_sf(x = ., coords = c("decimalLongitude", "decimalLatitude"), crs = "+proj=laea +lat_0=-10 +lon_0=-71 +x_0=0 +y_0=0 +a=6370997 +b=6370997 +units=m +no_defs") %>%  sf::st_coordinates() %>% SpatialPoints(.,proj4string= CRS(projection)) %>% sp::over(.,poly) %>% as_tibble() -> gridded
+     some <- gridded %>% bind_cols(some ,.)
+     
+     res <- 60/resolution
+     
+     g <- raster::raster(nrows=180*res,ncols=360*res,xmn=-180,xmx=180,ymn=-90,ymx=90,vals=1) 
+     
+     g[] <- runif(ncell(g))
+     crs(g) <- "+proj=laea +lat_0=-10 +lon_0=-71 +x_0=0 +y_0=0 +a=6370997 +b=6370997 +units=m +no_defs"
+     projection(g)
+
+     g <-  as(g, 'SpatialPixels')
+
+
+     
+     
+     some %>% select(decimalLongitude,decimalLatitude, scientificName, family) %>% 
+       sf::st_as_sf(x = ., coords = c("decimalLongitude", "decimalLatitude"), crs = "+proj=laea +lat_0=-10 +lon_0=-71 +x_0=0 +y_0=0 +a=6370997 +b=6370997 +units=m +no_defs") %>%
+       sf::st_transform(.,crs = proj4string(g)) %>%
+       sf::st_coordinates() %>%
+       SpatialPoints(.,proj4string= CRS(projection)) %>%
+       sp::over(.,g) %>%
+       enframe(.,name="name") %>%
+       rename_with(.,~all_of(c("name","CellID"))) %>%
+       select(CellID) %>%
+       bind_cols(.,some) -> gridded
+     
+     g@coords %>% as_tibble() %>% mutate(CellID=1:nrow(.)) -> coords
+     
+     pointos <- coords %>% select(1:2) %>% as.data.frame(.) %>% SpatialPoints(.)
+     
+     proj4string(pointos) <- projection
+     
+     points_powo <- sp::over(pointos,poly) %>% as_tibble()
+     
+     coords %<>% bind_cols(.,points_powo)
+     
+     # PROCESS THE DATA TO DO ALL THE ANALYSES:
+     #     - SPECIES RICHNESS
+     gridded %>%
+       select(scientificName,family,CellID) %>% 
+       filter(!is.na(scientificName)) %>% 
+       distinct(scientificName,family,CellID) %>%
+       count(CellID) %>% 
+       left_join(.,gridded %>% distinct(CellID,.keep_all = T),by="CellID") %>% 
+       select(CellID,n, scientificName, family) %>%
+       rename(SR=n) -> SR
+     
+     SR %<>% mutate(SR_std = (SR - min(SR,na.rm=TRUE)) / (max(SR,na.rm=TRUE) - min(SR,na.rm=TRUE)))
+     
+     #     - NUMBER OF RECORDS
+     gridded %>%
+       filter(!is.na(scientificName)) %>%
+       count(CellID) %>% 
+       left_join(.,gridded %>% distinct(CellID,.keep_all = T),by="CellID") %>%
+       select(CellID,n, scientificName, family) %>%
+       inner_join(.,SR,by="CellID") %>%
+       mutate(n_std = (n - min(n,na.rm=TRUE)) / (max(n,na.rm=TRUE) - min(n,na.rm=TRUE))) -> SR
+     
+     nombre <-  paste0("RichnessRecords_",resolution,".Rdata")
+     richness <- SR %>% left_join(.,coords,by="CellID")
+     richness %<>% 
+  select(-scientificName.x, -family.x) %>% 
+  rename(scientificName = scientificName.y, family = family.y)
+
+     save(richness,file=here("interim",nombre))
+     
+     SR <- richness
+     
+     
+     # - COMPLETENESS
+     load(data_comp)
+     
+     datos <- values %>% as_tibble()
+     
+     datos %>% select(Longitude,Latitude) %>% 
+       sf::st_as_sf(x = ., coords = c("Longitude", "Latitude"), crs = "+proj=laea +lat_0=-10 +lon_0=-71 +x_0=0 +y_0=0 +a=6370997 +b=6370997 +units=m +no_defs") %>% sf::st_transform(.,crs = proj4string(g)) %>%  sf::st_coordinates() %>% SpatialPoints(.,proj4string= CRS(projection)) %>% sp::over(.,g) %>% enframe(.,name="name") %>% rename_with(.,~all_of(c("name","CellID"))) %>% select(CellID) %>% bind_cols(.,datos) -> datos
+     
+     SR %<>% right_join(.,datos,by="CellID")
+     
+     datos <- SR
+     
+     nombre <-  paste0("Allmetrics_",resolution,".Rdata")
+     
+     save(datos,file=here("interim",nombre))
+    
+     
+```
+

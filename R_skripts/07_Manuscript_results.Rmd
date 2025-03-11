@@ -1,0 +1,429 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+## Load occurrences
+load("data/occ_epIGbackbone.Rdata")
+
+## Load survey completeness metrics per gridcell
+load("Completeness/Main30exp/EstimatorsAllFamilies.RData")
+
+file_path <- file.choose()
+poly <- rgdal::readOGR(file_path)
+poly <- st_as_sf(poly)
+poly <- st_make_valid(poly)
+
+datos <- EstimatorsAllFamilies %>%
+  st_as_sf(coords = c("Longitude", "Latitude")) %>%
+  st_set_crs(st_crs(poly)) %>%
+  st_join(poly) %>%
+  rename(n = Records, SR = Observed.richness)
+
+# Save as a shapefile
+# st_write(datos, "G:/My Drive/0_Research/0CONTINENT/1.Data/2.GAP Analysis/Shortfalls/output/Allmetrics30/output_cells.shp", driver = "ESRI Shapefile")
+```
+
+Save it with Lambert projection
+
+```{r}
+# Verify CRS initial of the data
+crs(poly)  # Must be EPSG:4326 (WGS84)
+crs(datos) # Must be EPSG:4326 (WGS84)
+
+# CRS Lambert Azimut Equal Area for America (EPSG:3575)
+crs_laea <- st_crs(3575)
+
+# Reprojectar data to LAEA
+poly_laea <- st_transform(poly, crs_laea)
+datos_laea <- st_transform(datos, crs_laea)
+
+# Verificar que la reproyección fue exitosa
+crs(poly_laea)
+crs(datos_laea)
+
+# Guardar los shapefiles reproyectados
+st_write(poly_laea, "G:/My Drive/0_Research/0CONTINENT/1.Data/2.GAP Analysis/Shortfalls/output/Allmetrics30/poly_laea.shp", delete_layer = TRUE)
+st_write(datos_laea, "G:/My Drive/0_Research/0CONTINENT/1.Data/2.GAP Analysis/Shortfalls/output/Allmetrics30/datos_laea.shp", delete_layer = TRUE)
+```
+
+# Manuscript paragraphs for the results section
+
+First paragraph: general
+
+```{r}
+# Grid 0.5° x 0.5° Neotropics
+cat(
+  st_make_grid(poly, cellsize = 0.5, square = TRUE) %>%
+    st_sf() %>%
+    st_filter(poly) %>%
+    { 
+      total_cells <- nrow(.)
+      cells_with_data <- sum(datos$n > 0)
+      perc_cells_with_data <- round((cells_with_data / total_cells) * 100, 1)
+      species_summary <- datos %>%
+        filter(Family == "All_Families") %>% 
+        group_by(SR) %>%
+        summarise(total_occurrences = sum(n))
+      
+      # Percentage of cells with data text
+      sprintf(
+        "Only c.%s%% of the Neotropical half-degree cells (n = %s) have georeferenced data for epiphytes", 
+        perc_cells_with_data, total_cells
+      )
+    },
+  
+  # Species with more than 10 records
+  aa %>%
+    group_by(species) %>%
+    summarise(n_records = n()) %>%
+    filter(n_records > 10) %>%
+    nrow() %>%
+    { 
+      species_with_10plus <- .
+      total_species <- aa %>% distinct(species) %>% nrow()
+      percentage <- round((species_with_10plus / total_species) * 100, 1)
+      
+      # Percentage of species with more than 10 records text
+      sprintf("and only %s%% of all species have more than 10 records.", percentage)
+    },
+  
+  # Records summary
+  datos %>%
+    filter(Family == "All_Families") %>% 
+    summarise(
+      avg_records = mean(n, na.rm = TRUE), 
+      sd_records = sd(n, na.rm = TRUE),    
+      median_records = median(n, na.rm = TRUE)
+    ) %>%
+    { 
+      records_summary <- .
+      sprintf("The number of records per cell averaged %.2f (sd = %.2f), with a median of %.2f.",
+              records_summary$avg_records, records_summary$sd_records, records_summary$median_records)
+    },
+  
+  # Richness description
+  datos %>%
+    filter(Family == "All_Families") %>% 
+    summarise(
+      mean_richness = mean(Richness, na.rm = TRUE),
+      sd_richness = sd(Richness, na.rm = TRUE),
+      median_richness = median(Richness, na.rm = TRUE)
+    ) %>%
+    { 
+      overall_richness <- .
+      paste(
+        "The overall species number across the study area had an average of",
+        round(overall_richness$mean_richness, 2), "species per cell (sd =",
+        round(overall_richness$sd_richness, 2), ") and a median of",
+        round(overall_richness$median_richness, 2), "species."
+      )
+    },
+  
+  # Family specific summary
+  list("Orchidaceae", "Bromeliaceae", "Araceae", "Piperaceae", "Polypodiaceae") %>%
+    purrr::map_chr(function(family) {
+      datos %>%
+        filter(Family == family) %>%
+        summarise(
+          mean_richness = mean(Richness, na.rm = TRUE),
+          sd_richness = sd(Richness, na.rm = TRUE),
+          median_richness = median(Richness, na.rm = TRUE)
+        ) %>%
+        { 
+          family_richness <- .
+          paste(
+            "For the", family, "family, the species richness had an average of",
+            round(family_richness$mean_richness, 2), "species per cell (sd =",
+            round(family_richness$sd_richness, 2), ") and a median of",
+            round(family_richness$median_richness, 2), "species."
+          )
+        }
+    })
+)
+
+```
+
+Linnean shortfall
+
+```{r}
+# Categorization of cells based on the slope
+datos <- datos %>%
+  mutate(
+    sampling_category = case_when(
+      Slope < 0.02 ~ "well-sampled",
+      Slope > 0.3 ~ "poorly-sampled",
+      TRUE ~ "fairly-sampled"
+    )
+  )
+
+# Function to calculate proportions
+calculate_proportions <- function(df) {
+  well_sampled <- sum(df$sampling_category == "well-sampled") / nrow(df) * 100
+  poorly_sampled <- sum(df$sampling_category == "poorly-sampled") / nrow(df) * 100
+  fairly_sampled <- sum(df$sampling_category == "fairly-sampled") / nrow(df) * 100
+  
+  return(list(well_sampled = round(well_sampled, 1),
+              poorly_sampled = round(poorly_sampled, 1),
+              fairly_sampled = round(fairly_sampled, 1)))
+}
+
+
+# General calculation for all families
+general_proportions <- calculate_proportions(datos %>% filter(Family == "All_Families"))
+
+# Create the general paragraph
+paragraph <- paste(
+  "Our results indicate that, overall, ", general_proportions$well_sampled, "% of the grid cells exhibit a high level of species registration, suggesting that most species in these areas have already been recorded, with little potential for discovering new species. ",
+  "In contrast, ", general_proportions$poorly_sampled, "% of the grid cells show a significant discrepancy between the recorded and expected species, highlighting a considerable taxonomic shortfall. In these areas, species accumulation continues rapidly, indicating a high potential for new species discoveries. ",
+  "The remaining ", general_proportions$fairly_sampled, "% of the cells exhibit moderate species discovery rates, suggesting that while some species remain to be described, the effort to uncover them is not as intensive as in areas with high taxonomic shortfall.",
+  sep = ""
+)
+
+# Specific families
+families <- c("Orchidaceae", "Bromeliaceae", "Araceae", "Piperaceae", "Polypodiaceae")
+family_paragraphs <- c()
+
+for (fam in families) {
+  fam_proportions <- calculate_proportions(datos %>% filter(Family == fam))
+  
+  fam_summary <- paste(
+    fam, ":", fam_proportions$well_sampled, "% well-sampled, ",
+    fam_proportions$poorly_sampled, "% poorly-sampled, ",
+    fam_proportions$fairly_sampled, "% fairly-sampled.",
+    sep = ""
+  )
+  
+  family_paragraphs <- c(family_paragraphs, fam_summary)
+}
+
+# Combine all family summaries into a single sentence
+family_text <- paste("Among individual families, we found variation in sampling completeness:", paste(family_paragraphs, collapse = " "), sep = " ")
+
+# Final paragraph
+paragraph <- paste(paragraph, family_text, sep = " ")
+
+# Print the paragraph
+cat(paragraph)
+```
+
+Wallacean shortfall 
+
+```{r}
+# Categorizing the cells according to the Wallacean shortfall
+datos <- datos %>%
+  mutate(
+    `Occurrences-to-species ratio` = n / SR) %>% 
+  mutate(
+    wallacean_category = case_when(
+      Completeness > 90 & `Occurrences-to-species ratio` > 15 ~ "well-sampled",
+      Completeness < 50 & `Occurrences-to-species ratio` < 3 ~ "poorly-sampled",
+      TRUE ~ "fairly-sampled"
+    )
+  )
+
+# Function to generate summary statistics and text for a given family
+summarize_wallacean_shortfall <- function(datos, family_name) {
+  filtered_data <- datos %>% filter(Family == family_name)
+  
+  well_sampled_provinces <- filtered_data %>% filter(wallacean_category == "well-sampled") %>%
+    count(Provincias) %>%
+    top_n(5, n)
+  
+  poorly_sampled_provinces <- filtered_data %>% filter(wallacean_category == "poorly-sampled") %>%
+    count(Provincias) %>%
+    top_n(5, n)
+  
+  fairly_sampled_provinces <- filtered_data %>% filter(wallacean_category == "fairly-sampled") %>%
+    count(Provincias) %>%
+    top_n(5, n)
+  
+  well_sampled <- sum(filtered_data$wallacean_category == "well-sampled") / nrow(filtered_data) * 100
+  poorly_sampled <- sum(filtered_data$wallacean_category == "poorly-sampled") / nrow(filtered_data) * 100
+  fairly_sampled <- sum(filtered_data$wallacean_category == "fairly-sampled") / nrow(filtered_data) * 100
+  
+  paste(
+    "For ", family_name, ", our results show that ", round(well_sampled, 2), "% of the grid cells were classified as well-sampled, primarily found in provinces such as ",
+    paste(well_sampled_provinces$Provincias, collapse = ", "), ". Conversely, ", round(poorly_sampled, 1), "% of the grid cells were categorized as poorly-sampled, concentrated in provinces such as ",
+    paste(poorly_sampled_provinces$Provincias, collapse = ", "), ". The remaining ", round(fairly_sampled, 1), "% of cells were categorized as fairly-sampled, mainly located in provinces such as ",
+    paste(fairly_sampled_provinces$Provincias, collapse = ", "), ".", sep = ""
+  )
+}
+
+# Generate paragraph for all families combined
+paragraph_all <- summarize_wallacean_shortfall(datos, "All_Families")
+
+# Generate paragraphs for each family
+families <- c("Orchidaceae", "Bromeliaceae", "Araceae", "Piperaceae", "Polypodiaceae")
+paragraph_families <- sapply(families, function(f) summarize_wallacean_shortfall(datos, f))
+
+# Printing the paragraphs
+cat(paragraph_all, "\n\n", paste(paragraph_families, collapse = "\n\n"))
+```
+
+Maping to see well-sampled provinces
+
+```{r}
+# Filter well-sampled grids
+well_sampled_data <- datos %>%
+  filter(wallacean_category == "well-sampled")
+
+well_sampled_sf <- well_sampled_data %>%
+  st_as_sf(coords = c("Longitude", "Latitude"), crs = 4326)
+
+# map
+ggplot() +
+  geom_sf(data = poly, fill = "gray", color = "black", alpha = 0.5) +
+  geom_sf(data = well_sampled_sf, aes(color = "Well-Sampled"), size = 1) +
+  scale_color_manual(values = c("Well-Sampled" = "red")) +
+  theme_minimal() +
+  labs(title = "Well-Sampled Grid Cells in the Neotropics", color = "Sampling Category") +
+  theme(legend.position = "bottom") +
+  theme(axis.text = element_blank(), axis.ticks = element_blank(), axis.title = element_blank())
+```
+
+Table per provinces
+
+```{r}
+result <- datos %>%
+  filter(!is.na(Provincias)) %>%
+  filter(Provincias != "N/A") %>%
+  group_by(Provincias) %>%
+  summarise(
+    mean_n = mean(n, na.rm = TRUE),
+    mean_sr = mean(SR, na.rm = TRUE),
+    TS_WS = 100 * sum(sampling_category == "well-sampled", na.rm = TRUE) / n(),
+    TS_FS = 100 * sum(sampling_category == "fairly-sampled", na.rm = TRUE) / n(),
+    TS_PS = 100 * sum(sampling_category == "poorly-sampled", na.rm = TRUE) / n(),
+    GS_WS = 100 * sum(wallacean_category == "well-sampled", na.rm = TRUE) / n(),
+    GS_FS = 100 * sum(wallacean_category == "fairly-sampled", na.rm = TRUE) / n(),
+    GS_PS = 100 * sum(wallacean_category == "poorly-sampled", na.rm = TRUE) / n()
+  ) %>%
+  arrange(Provincias)
+
+write.csv(result, "output/Result_per_Provinces.csv", row.names = FALSE)
+```
+
+Hotspots analysis: general
+
+```{r}
+load("output/sf_Hotspots_30.Rdata")
+df <- sf_final
+
+# Convertir el data frame a un objeto sf y establecer CRS
+df <- df %>%
+  st_as_sf(coords = c("Longitude", "Latitude")) %>%
+  st_set_crs(st_crs(poly)) %>%
+  st_join(poly)
+
+# Seleccionar las 3 provincias más frecuentes en cada categoría
+top_hotspot_slope <- df %>%
+  filter(Slope_class == "Hotspot") %>%
+  group_by(Provincias) %>%
+  tally() %>%
+  arrange(desc(n)) %>%
+  ungroup() %>%
+  filter(!is.na(Provincias)) %>%
+  slice_head(n = 3) %>%
+  pull(Provincias)
+
+top_coldspot_slope <- df %>%
+  filter(Slope_class == "Coldspot") %>%
+  group_by(Provincias) %>%
+  tally() %>%
+  arrange(desc(n)) %>%
+  ungroup() %>%
+  filter(!is.na(Provincias)) %>%
+  slice_head(n = 3) %>%
+  pull(Provincias)
+
+top_hotspot_completeness <- df %>%
+  filter(Completeness_class == "Hotspot") %>%
+  group_by(Provincias) %>%
+  tally() %>%
+  arrange(desc(n)) %>%
+  ungroup() %>%
+  filter(!is.na(Provincias)) %>%
+  slice_head(n = 3) %>%
+  pull(Provincias)
+
+top_coldspot_completeness <- df %>%
+  filter(Completeness_class == "Coldspot") %>%
+  group_by(Provincias) %>%
+  tally() %>%
+  arrange(desc(n)) %>%
+  ungroup()  %>%
+  filter(!is.na(Provincias)) %>%
+  slice_head(n = 3) %>%
+  pull(Provincias)
+
+# Construcción del párrafo de resultados
+results_paragraph <- paste0(
+  "The spatial analysis of survey completeness and species accumulation slope reveals distinct patterns of biodiversity shortfalls. ",
+  "Hotspots of species accumulation slope were identified in ",
+  paste(top_hotspot_slope, collapse = ", "),  
+  ". Coldspots were predominantly found in ",
+  paste(top_coldspot_slope, collapse = ", "),  
+  ". For survey completeness, hotspots were mostly concentrated in ",
+  paste(top_hotspot_completeness, collapse = ", "), 
+  ". Coldspots for survey completeness were detected in ",
+  paste(top_coldspot_completeness, collapse = ", "),
+  "."
+)
+
+# Imprimir el resumen
+cat(results_paragraph)
+
+
+
+```
+
+
+CRediT authors statements for scientific publications
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## CRediT for epig Pipeline
+
+```{r, echo=FALSE}
+install.packages("CRediTas", repos = "https://ropensci.r-universe.dev")
+library(CRediTas)
+```
+
+
+## Making the list of authors
+
+```{r}
+library(CRediTas)
+
+template_create(authors = c("Alexander Humboldt", "Carl Ritter"), file = tempfile())
+
+cras_table <- template_create(authors = c("Maria Judith Carmona-Higuita",
+                                          "Andreas Mehl",
+                                          "Glenda Mendieta-Leiva",
+                                          "Alexander Zizka",
+                                          "Derio Jiménez-López",
+                                          "Flavio Nunes Ramos",
+                                          "Michael Kessler",
+                                          "Talitha Mayumi Francisco",
+                                          "Ana María Benavides",
+                                          "André Luis de Gasper",
+                                          "Nayely Martínez-Meléndez",
+                                          "Adriano Costa Quaresma",
+                                          "Alex Fernando Mendes"))
+knitr::kable(cras_table)
+
+fix(cras_table)
+
+textfile <- tempfile()
+# cras_write(cras_table, textfile, markdown = TRUE, quiet = FALSE)
+readLines(textfile)
+
+```
+
+
+
