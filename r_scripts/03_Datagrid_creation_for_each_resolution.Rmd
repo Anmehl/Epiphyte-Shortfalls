@@ -1,5 +1,5 @@
 ---
-title: "format_completeness"
+title: "Completeness"
 author: "Andreas Mehl"
 date: "2024-12-16"
 output: html_document
@@ -55,7 +55,7 @@ options(locale = locale(encoding = "UTF-8"))
  g <-  as(g, 'SpatialPixels') # Convert to SpatialPixels
 
 # Map species occurrences to 1-degree grid
-  some %>% select(decimalLongitude,decimalLatitude) %>% 
+  some %>% select(decimalLongitude, decimalLatitude) %>% 
     sf::st_as_sf(x = ., coords = c("decimalLongitude", "decimalLatitude"), crs = "+proj=laea +lat_0=-10 +lon_0=-71 +x_0=0 +y_0=0 +a=6370997 +b=6370997 +units=m +no_defs") %>%
     sf::st_transform(.,crs = proj4string(g)) %>%
     sf::st_coordinates() %>% SpatialPoints(.,proj4string= CRS(projection)) %>% sp::over(.,g) %>%
