@@ -10,5 +10,5 @@ This is the repository for (Carmona-Higuita et al., 2025) Data Shortfalls on Vas
 
 When using this code please cite:   
 [![DOI](https://zenodo.org/badge/942826741.svg)](https://doi.org/10.5281/zenodo.15001563)   
-and   
+and:   
 (Carmona-Higuita et al., 2025) Data Shortfalls on Vascular Epiphytes in the Neotropics
