@@ -8,7 +8,7 @@ output: html_document
 
 Here the code:
 
-1. Calculates the estimators (at resolutions 30 and 15 minute of arc);
+1. Calculates the estimators (at resolutions 30 and 15 minutes of arc);
 2. Sets the results in categories according to Lobo et al. (2018);
 3. Plots the results;
 4. Saves objects of results and plots.

@@ -48,7 +48,7 @@ options(locale = locale(encoding = "UTF-8"))
   
   
   #### ONE DEGREE GRID
-#  (although we do not use this resolution we needed to consecutively aggregate the data afterwards into smaller resolutions)
+# (although we do not use this resolution we needed to consecutively aggregate the data afterwards into smaller resolutions)
   g <- raster::raster(nrows=180*1,ncols=360*1,xmn=-180,xmx=180,ymn=-90,ymx=90,vals=1) 
 
   g[] <- runif(ncell(g))
