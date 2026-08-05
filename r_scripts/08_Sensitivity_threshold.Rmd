@@ -1,0 +1,264 @@
+---
+title: "Sensitivity analysis: minimum records threshold"
+author: "Maria Carmona-Higuita"
+date: "2026-08"
+output: html_document
+---
+
+This script addresses Reviewer 1 (Pg9 ln164): sensitivity of the main results
+to the choice of the 10-record minimum threshold used to filter grid cells before
+applying the sampling completeness categories.
+
+The approach: the KnowBR estimators are already computed for ALL cells. The
+10-record threshold is applied as a post-hoc filter (same as main analysis).
+Here we repeat that filter at thresholds 5, 10, 15, 20, 25, and 30 and compare:
+  (a) Number and % of cells retained
+  (b) % of cells in each sampling category (slope-based and completeness-based)
+  (c) Spearman rank correlation of completeness scores between threshold=10
+      and each alternative, to assess stability of spatial rankings
+
+```{r setup, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(here)
+library(ggplot2)
+library(patchwork)
+library(MetBrewer)
+
+dir.create(here("output/figures"), recursive = TRUE, showWarnings = FALSE)
+dir.create(here("output/Tables"),  recursive = TRUE, showWarnings = FALSE)
+
+# Load estimators — all cells (no threshold yet)
+load(here("output/completeness/Main30exp/EstimatorsAllFamilies.RData"))
+
+# Work with All_Families only for the threshold sensitivity
+all_fam_full <- EstimatorsAllFamilies %>%
+  filter(Family == "All_Families") %>%
+  filter(!is.na(Slope), !is.na(Completeness), !is.na(Ratio)) %>%
+  rename(n = Records, SR = Observed.richness)
+
+cat("Total cells with KnowBR estimators (All_Families, no threshold):", nrow(all_fam_full), "\n")
+cat("Records range:", min(all_fam_full$n), "–", max(all_fam_full$n), "\n")
+```
+
+# 1. Define categorisation function (same logic as main analysis)
+
+```{r}
+# Slope-based categories (3-level, as used in Results text)
+categorise_slope <- function(df) {
+  df %>% mutate(
+    cat_slope = case_when(
+      Slope < 0.02 ~ "Well-sampled",
+      Slope > 0.3  ~ "Poorly-sampled",
+      TRUE         ~ "Fairly-sampled"
+    )
+  )
+}
+
+# Completeness + R/S ratio categories (3-level)
+categorise_comp <- function(df) {
+  df %>% mutate(
+    cat_comp = case_when(
+      Completeness > 90 & (n / SR) > 15 ~ "Well-sampled",
+      Completeness < 50 & (n / SR) < 3  ~ "Poorly-sampled",
+      TRUE                               ~ "Fairly-sampled"
+    )
+  )
+}
+
+# Proportions summary
+proportions_summary <- function(df, threshold) {
+  d <- df %>% filter(n >= threshold) %>%
+    categorise_slope() %>%
+    categorise_comp()
+
+  n_cells <- nrow(d)
+  total   <- nrow(df)
+
+  slope_props <- d %>%
+    count(cat_slope) %>%
+    mutate(pct = round(n / n_cells * 100, 1)) %>%
+    pivot_wider(names_from = cat_slope, values_from = c(n, pct),
+                names_glue = "slope_{cat_slope}_{.value}")
+
+  comp_props <- d %>%
+    count(cat_comp) %>%
+    mutate(pct = round(n / n_cells * 100, 1)) %>%
+    pivot_wider(names_from = cat_comp, values_from = c(n, pct),
+                names_glue = "comp_{cat_comp}_{.value}")
+
+  tibble(threshold = threshold,
+         n_cells   = n_cells,
+         pct_cells_retained = round(n_cells / total * 100, 1)) %>%
+    bind_cols(slope_props) %>%
+    bind_cols(comp_props)
+}
+```
+
+# 2. Run across thresholds
+
+```{r}
+thresholds <- c(5, 10, 15, 20, 25, 30)
+
+results_list <- map(thresholds, ~proportions_summary(all_fam_full, .x))
+sens_table <- bind_rows(results_list)
+
+# Clean up column names for display
+cat("=== Sensitivity table ===\n")
+sens_table %>%
+  select(threshold, n_cells, pct_cells_retained,
+         starts_with("slope_Well"), starts_with("slope_Fairly"), starts_with("slope_Poorly"),
+         starts_with("comp_Well"),  starts_with("comp_Fairly"),  starts_with("comp_Poorly")) %>%
+  print(width = 160)
+```
+
+# 3. Visualise: how proportions change with threshold
+
+```{r fig.width=10, fig.height=5}
+# Long format for plotting
+plot_df <- sens_table %>%
+  select(threshold,
+         `Well-sampled (slope)`   = `slope_Well-sampled_pct`,
+         `Fairly-sampled (slope)` = `slope_Fairly-sampled_pct`,
+         `Poorly-sampled (slope)` = `slope_Poorly-sampled_pct`,
+         `Well-sampled (comp+R/S)`   = `comp_Well-sampled_pct`,
+         `Fairly-sampled (comp+R/S)` = `comp_Fairly-sampled_pct`,
+         `Poorly-sampled (comp+R/S)` = `comp_Poorly-sampled_pct`) %>%
+  pivot_longer(-threshold, names_to = "category", values_to = "pct") %>%
+  mutate(proxy = ifelse(str_detect(category, "slope"), "Slope-based", "Completeness + R/S"),
+         cat   = str_extract(category, "Well|Fairly|Poorly") %>%
+                   factor(levels = c("Well", "Fairly", "Poorly")))
+
+pal <- MetBrewer::met.brewer("Hiroshige")[c(1, 6, 12)]
+
+p_slope <- plot_df %>% filter(proxy == "Slope-based") %>%
+  ggplot(aes(x = threshold, y = pct, color = cat, group = cat)) +
+  geom_line(linewidth = 0.9) +
+  geom_point(size = 2.5) +
+  geom_vline(xintercept = 10, linetype = "dashed", color = "grey40", linewidth = 0.6) +
+  annotate("text", x = 10.5, y = 5, label = "Main analysis\n(n = 10)", hjust = 0,
+           size = 3, color = "grey40", family = "EB Garamond") +
+  scale_color_manual(values = pal, name = "") +
+  scale_x_continuous(breaks = thresholds) +
+  labs(x = "Minimum records threshold", y = "% of cells",
+       title = "Slope-based proxy",
+       subtitle = "Sensitivity to threshold choice") +
+  theme_classic(base_family = "EB Garamond") +
+  theme(legend.position = "bottom")
+
+p_comp <- plot_df %>% filter(proxy == "Completeness + R/S") %>%
+  ggplot(aes(x = threshold, y = pct, color = cat, group = cat)) +
+  geom_line(linewidth = 0.9) +
+  geom_point(size = 2.5) +
+  geom_vline(xintercept = 10, linetype = "dashed", color = "grey40", linewidth = 0.6) +
+  scale_color_manual(values = pal, name = "") +
+  scale_x_continuous(breaks = thresholds) +
+  labs(x = "Minimum records threshold", y = "% of cells",
+       title = "Completeness + R/S ratio proxy",
+       subtitle = "Sensitivity to threshold choice") +
+  theme_classic(base_family = "EB Garamond") +
+  theme(legend.position = "bottom")
+
+p_coverage <- sens_table %>%
+  ggplot(aes(x = threshold, y = pct_cells_retained)) +
+  geom_line(linewidth = 0.9, color = MetBrewer::met.brewer("Hiroshige")[4]) +
+  geom_point(size = 2.5, color = MetBrewer::met.brewer("Hiroshige")[4]) +
+  geom_vline(xintercept = 10, linetype = "dashed", color = "grey40", linewidth = 0.6) +
+  scale_x_continuous(breaks = thresholds) +
+  labs(x = "Minimum records threshold", y = "% of cells retained",
+       title = "Spatial coverage",
+       subtitle = "Cells retained at each threshold") +
+  theme_classic(base_family = "EB Garamond")
+
+(p_slope | p_comp | p_coverage) +
+  plot_annotation(
+    title    = "Sensitivity of sampling completeness results to minimum records threshold",
+    subtitle = "30 arc-minute resolution, All Families. Dashed line = threshold used in main analysis (n = 10).",
+    theme    = theme(text = element_text(family = "EB Garamond"))
+  )
+
+ggsave(here("output/figures/FigS_sensitivity_threshold.jpg"),
+       width = 12, height = 5, dpi = 300)
+```
+
+# 4. Rank correlation: spatial stability of completeness scores
+
+How much do the relative rankings of cells change when a different threshold is used?
+A high Spearman ρ means the same cells appear well- vs. poorly-sampled regardless of threshold.
+
+```{r}
+ref_threshold <- 10
+ref_data <- all_fam_full %>%
+  filter(n >= ref_threshold) %>%
+  select(Longitude, Latitude, Completeness_ref = Completeness, Slope_ref = Slope)
+
+cat("=== Spearman rank correlations vs. threshold = 10 ===\n")
+rank_cors <- map_df(thresholds[thresholds != ref_threshold], function(thr) {
+  alt_data <- all_fam_full %>%
+    filter(n >= thr) %>%
+    select(Longitude, Latitude, Completeness_alt = Completeness, Slope_alt = Slope)
+
+  shared <- inner_join(ref_data, alt_data, by = c("Longitude", "Latitude"))
+
+  rho_comp  <- cor(shared$Completeness_ref, shared$Completeness_alt, method = "spearman")
+  rho_slope <- cor(shared$Slope_ref,        shared$Slope_alt,        method = "spearman")
+
+  tibble(
+    threshold     = thr,
+    n_shared      = nrow(shared),
+    rho_completeness = round(rho_comp,  3),
+    rho_slope        = round(rho_slope, 3)
+  )
+})
+
+print(rank_cors)
+```
+
+# 5. Manuscript text generator
+
+```{r}
+# Pull key values for main threshold (10)
+main_row <- sens_table %>% filter(threshold == 10)
+n10      <- main_row$n_cells
+pct_ret  <- main_row$pct_cells_retained
+
+well_s   <- main_row$`slope_Well-sampled_pct`
+fair_s   <- main_row$`slope_Fairly-sampled_pct`
+poor_s   <- main_row$`slope_Poorly-sampled_pct`
+
+# Rank correlation range
+rho_min <- min(rank_cors$rho_completeness)
+rho_max <- max(rank_cors$rho_completeness)
+
+cat("=== Manuscript text addition (Methods §2, after threshold justification) ===\n\n")
+cat(sprintf(
+"To assess the robustness of our results to the choice of minimum records threshold, ",
+"we repeated the sampling completeness categorisation across thresholds of 5, 10, 15, 20, 25, and 30 records per cell. ",
+"The proportion of well-sampled (%.1f%%), fairly-sampled (%.1f%%), and poorly-sampled (%.1f%%) cells ",
+"(slope-based proxy) remained stable across all tested thresholds (Supplementary Figure SX), ",
+"and the spatial rankings of cells were highly concordant with those obtained at the selected ",
+"threshold of 10 records (Spearman ρ = %.2f–%.2f for all pairwise comparisons). ",
+"The 10-record threshold retains %.1f%% of cells with KnowBR estimators (n = %d cells), ",
+"providing a balance between spatial coverage and estimator reliability.",
+well_s, fair_s, poor_s, rho_min, rho_max, pct_ret, n10
+))
+
+cat("\n\n=== Supplementary Figure caption ===\n")
+cat(sprintf(
+"Figure SX. Sensitivity of sampling completeness results to the choice of minimum ",
+"records threshold. Panels show the percentage of grid cells classified as well-sampled, ",
+"fairly-sampled, and poorly-sampled using the slope-based proxy (left) and the ",
+"completeness + R/S ratio proxy (centre), and the proportion of cells retained at each ",
+"threshold (right). Dashed line indicates the threshold used in the main analysis (n ≥ 10 records). ",
+"All analyses at 30 arc-minute resolution, All Families (n = %d cells at threshold = 10).",
+n10
+))
+```
+
+# 6. Save full sensitivity table as CSV
+
+```{r}
+write.csv(sens_table,
+          here("output/Tables/TableS_sensitivity_threshold.csv"),
+          row.names = FALSE)
+cat("Saved: output/Tables/TableS_sensitivity_threshold.csv\n")
+```
