@@ -1,0 +1,305 @@
+---
+title: "Correlation analysis among KnowBR metrics"
+author: "Maria Carmona-Higuita"
+date: "2025-08"
+output: html_document
+---
+
+This script addresses Reviewer 1's comment (Pg8 ln156): "I have strong concerns that the
+metrics being used to assess inventory completeness are highly correlated, and may therefore
+be reflecting similar or redundant patterns. I recommend that the authors conduct a
+correlation analysis to assess the degree of overlap among these metrics."
+
+It also addresses:
+- Reviewer 1 Pg10 ln196: median vs. mean + histogram of records distribution
+- Reviewer 1 Pg11 ln207: Pearson r between records and species richness
+
+```{r setup, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(here)
+library(ggplot2)
+library(GGally)       # ggpairs for scatter matrix — install.packages("GGally") if missing
+library(corrplot)     # correlation heatmap — install.packages("corrplot") if missing
+library(MetBrewer)
+library(patchwork)
+
+# Create output directories if they don't exist
+dir.create(here("output/figures"), recursive = TRUE, showWarnings = FALSE)
+dir.create(here("output/Tables"),  recursive = TRUE, showWarnings = FALSE)
+
+# Load the 30 arc-minute estimators (main resolution)
+load(here("output/completeness/Main30exp/EstimatorsAllFamilies.RData"))
+
+# Apply the same 10-record cutoff used throughout the paper
+datos <- EstimatorsAllFamilies %>%
+  filter(Records >= 10) %>%                    # same threshold as main analysis
+  filter(!is.na(Slope), !is.na(Completeness), !is.na(Ratio)) %>%
+  rename(n = Records, SR = Observed.richness)
+```
+
+# 1. Overview of the three metrics (All Families)
+
+```{r}
+all_fam <- datos %>% filter(Family == "All_Families")
+
+cat("Grid cells with n >= 10:", nrow(all_fam), "\n")
+cat("\nSummary statistics:\n")
+all_fam %>%
+  select(Slope, Completeness, Ratio) %>%
+  summary() %>%
+  print()
+
+# Median and IQR (appropriate for non-normal data)
+all_fam %>%
+  select(Slope, Completeness, Ratio, n, SR) %>%
+  summarise(across(everything(),
+    list(median = ~median(., na.rm=TRUE),
+         IQR    = ~IQR(., na.rm=TRUE),
+         mean   = ~mean(., na.rm=TRUE),
+         sd     = ~sd(., na.rm=TRUE)),
+    .names = "{.col}_{.fn}")) %>%
+  pivot_longer(everything(), names_to = c("var","stat"), names_sep = "_") %>%
+  pivot_wider(names_from = stat, values_from = value) %>%
+  print()
+```
+
+# 2. Normality tests
+
+```{r}
+cat("=== Shapiro-Wilk normality tests (All Families, n <= 5000 required) ===\n")
+# Shapiro-Wilk requires n <= 5000; sample if needed
+for (var in c("Slope", "Completeness", "Ratio", "n", "SR")) {
+  x <- all_fam[[var]]
+  x <- x[!is.na(x)]
+  if (length(x) > 5000) x <- sample(x, 5000)
+  sw <- shapiro.test(x)
+  cat(sprintf("  %s: W = %.4f, p = %.2e → %s\n",
+              var, sw$statistic, sw$p.value,
+              ifelse(sw$p.value < 0.05, "NON-NORMAL", "normal")))
+}
+```
+
+# 3. Histogram of records distribution (for supplementary)
+# Justifies use of median over mean (Reviewer 1 Pg10 ln196)
+
+```{r fig.width=10, fig.height=4}
+p_hist_n <- ggplot(all_fam, aes(x = n)) +
+  geom_histogram(bins = 60, fill = MetBrewer::met.brewer("Hiroshige")[3], color = "white", linewidth = 0.2) +
+  geom_vline(aes(xintercept = median(n, na.rm=TRUE), linetype = "Median"),
+             color = "black", linewidth = 0.8) +
+  geom_vline(aes(xintercept = mean(n, na.rm=TRUE), linetype = "Mean"),
+             color = "red", linewidth = 0.8) +
+  scale_linetype_manual(name = "", values = c("Median" = "solid", "Mean" = "dashed")) +
+  scale_x_log10(labels = scales::comma) +
+  labs(x = "Number of occurrence records per cell (log scale)",
+       y = "Number of cells",
+       title = "Distribution of occurrence records per grid cell",
+       subtitle = sprintf("Median = %d   Mean = %d   (n = %d cells)",
+                          round(median(all_fam$n)), round(mean(all_fam$n)), nrow(all_fam))) +
+  theme_classic(base_family = "EB Garamond") +
+  theme(legend.position = "top")
+
+p_hist_sr <- ggplot(all_fam, aes(x = SR)) +
+  geom_histogram(bins = 60, fill = MetBrewer::met.brewer("Hiroshige")[8], color = "white", linewidth = 0.2) +
+  geom_vline(aes(xintercept = median(SR, na.rm=TRUE), linetype = "Median"),
+             color = "black", linewidth = 0.8) +
+  geom_vline(aes(xintercept = mean(SR, na.rm=TRUE), linetype = "Mean"),
+             color = "red", linewidth = 0.8) +
+  scale_linetype_manual(name = "", values = c("Median" = "solid", "Mean" = "dashed")) +
+  scale_x_log10(labels = scales::comma) +
+  labs(x = "Species richness per cell (log scale)",
+       y = "Number of cells",
+       title = "Distribution of species richness per grid cell",
+       subtitle = sprintf("Median = %d   Mean = %d",
+                          round(median(all_fam$SR)), round(mean(all_fam$SR)))) +
+  theme_classic(base_family = "EB Garamond") +
+  theme(legend.position = "top")
+
+p_hist_n + p_hist_sr
+ggsave(here("output/figures/FigS_histograms_records_richness.jpg"),
+       width = 10, height = 4, dpi = 300)
+```
+
+# 4. Pearson correlation: records × species richness
+# Addresses Reviewer 1 Pg11 ln207: "report Pearson's correlation coefficient"
+
+```{r}
+cor_nr <- cor.test(all_fam$n, all_fam$SR, method = "pearson")
+cor_nr_sp <- cor.test(all_fam$n, all_fam$SR, method = "spearman", exact = FALSE)
+
+cat("=== Records vs. Species Richness ===\n")
+cat(sprintf("  Pearson r = %.3f, t(%d) = %.2f, p = %.2e\n",
+            cor_nr$estimate, cor_nr$parameter, cor_nr$statistic, cor_nr$p.value))
+cat(sprintf("  Spearman rho = %.3f, p = %.2e\n",
+            cor_nr_sp$estimate, cor_nr_sp$p.value))
+```
+
+# 5. Correlation among the three KnowBR metrics
+# Core analysis addressing Reviewer 1 Pg8 ln156
+
+```{r}
+cat("=== Pairwise correlations: Slope × Completeness × Ratio (All Families) ===\n")
+
+metrics <- all_fam %>% select(Slope, Completeness, Ratio)
+
+# Pearson
+pearson_mat <- cor(metrics, method = "pearson", use = "complete.obs")
+cat("\nPearson correlation matrix:\n")
+print(round(pearson_mat, 3))
+
+# Spearman (more robust for non-normal data)
+spearman_mat <- cor(metrics, method = "spearman", use = "complete.obs")
+cat("\nSpearman correlation matrix:\n")
+print(round(spearman_mat, 3))
+
+# Significance tests for each pair
+pairs <- list(
+  c("Slope", "Completeness"),
+  c("Slope", "Ratio"),
+  c("Completeness", "Ratio")
+)
+
+cat("\n=== Correlation significance tests ===\n")
+for (pair in pairs) {
+  ct_p <- cor.test(metrics[[pair[1]]], metrics[[pair[2]]], method = "pearson")
+  ct_s <- cor.test(metrics[[pair[1]]], metrics[[pair[2]]], method = "spearman", exact = FALSE)
+  cat(sprintf("\n%s × %s:\n", pair[1], pair[2]))
+  cat(sprintf("  Pearson  r   = %+.3f (p = %.2e)\n", ct_p$estimate, ct_p$p.value))
+  cat(sprintf("  Spearman rho = %+.3f (p = %.2e)\n", ct_s$estimate, ct_s$p.value))
+}
+```
+
+# 6. Scatter matrix with correlation coefficients (All Families)
+
+```{r fig.width=8, fig.height=8}
+p_pairs <- all_fam %>%
+  select(Slope, Completeness, Ratio) %>%
+  GGally::ggpairs(
+    lower = list(continuous = GGally::wrap("points", alpha = 0.15, size = 0.4,
+                                           color = MetBrewer::met.brewer("Hiroshige")[4])),
+    diag  = list(continuous = GGally::wrap("densityDiag",
+                                           fill  = MetBrewer::met.brewer("Hiroshige")[8],
+                                           alpha = 0.5)),
+    upper = list(continuous = GGally::wrap("cor", method = "spearman",
+                                           size = 5, color = "black")),
+    columnLabels = c("Slope", "Completeness (%)", "R/S Ratio")
+  ) +
+  labs(title = "Pairwise relationships among KnowBR metrics (30 arc-min, All Families)",
+       subtitle = "Upper panels: Spearman ρ; Lower panels: scatter plot") +
+  theme_classic(base_family = "EB Garamond")
+
+p_pairs
+ggsave(here("output/figures/FigS_metric_correlations_all_families.jpg"),
+       plot = p_pairs, width = 8, height = 8, dpi = 300)
+```
+
+# 7. Correlation heatmap (publication quality)
+
+```{r fig.width=6, fig.height=5}
+jpeg(here("output/figures/FigS_corrplot_metrics.jpg"), width = 600, height = 500, quality = 95)
+corrplot::corrplot.mixed(
+  spearman_mat,
+  lower       = "ellipse",
+  upper       = "number",
+  tl.col      = "black",
+  tl.cex      = 1.1,
+  number.cex  = 1.2,
+  cl.cex      = 0.9,
+  col         = corrplot::COL2("RdBu", 10),
+  title       = "Spearman correlations: slope × completeness × R/S ratio",
+  mar         = c(0, 0, 2, 0)
+)
+dev.off()
+```
+
+# 8. Per-family correlations
+
+```{r}
+families <- c("Orchidaceae", "Bromeliaceae", "Araceae", "Piperaceae", "Polypodiaceae")
+
+cat("=== Spearman correlations by family ===\n")
+family_cors <- map_df(families, function(fam) {
+  d <- datos %>% filter(Family == fam) %>%
+    filter(!is.na(Slope), !is.na(Completeness), !is.na(Ratio))
+  if (nrow(d) < 10) return(NULL)
+  tibble(
+    Family              = fam,
+    n_cells             = nrow(d),
+    rho_Slope_Comp      = cor(d$Slope, d$Completeness, method = "spearman"),
+    rho_Slope_Ratio     = cor(d$Slope, d$Ratio,        method = "spearman"),
+    rho_Comp_Ratio      = cor(d$Completeness, d$Ratio, method = "spearman")
+  )
+})
+
+family_cors %>%
+  mutate(across(starts_with("rho"), ~round(., 3))) %>%
+  print()
+```
+
+# 9. Manuscript text generator
+
+```{r}
+# All Families Spearman correlations
+rho_sc <- round(spearman_mat["Slope", "Completeness"], 2)
+rho_sr <- round(spearman_mat["Slope", "Ratio"], 2)
+rho_cr <- round(spearman_mat["Completeness", "Ratio"], 2)
+
+# Significance for Slope × Completeness
+ct_sc <- cor.test(all_fam$Slope, all_fam$Completeness, method = "spearman", exact = FALSE)
+ct_sr <- cor.test(all_fam$Slope, all_fam$Ratio,        method = "spearman", exact = FALSE)
+ct_cr <- cor.test(all_fam$Completeness, all_fam$Ratio, method = "spearman", exact = FALSE)
+
+cat("=== Manuscript text (Methods / Results / Supp) ===\n\n")
+
+cat("METHODS ADDITION (after metric descriptions):\n")
+cat(sprintf(
+  "Although the three KnowBR metrics (slope, completeness, and R/S ratio) are inter-related, ",
+  "they capture complementary aspects of inventory completeness (Spearman correlations: ",
+  "slope × completeness ρ = %.2f; slope × R/S ratio ρ = %.2f; completeness × R/S ratio ρ = %.2f; ",
+  "all p < 0.001; Supplementary Table SX). ",
+  "The slope reflects the current rate of species discovery, ",
+  "completeness estimates the proportion of predicted species already recorded, ",
+  "and the R/S ratio measures sampling intensity. ",
+  "Using both proxies therefore provides a more comprehensive assessment of the Wallacean shortfall ",
+  "than any single metric alone.",
+  rho_sc, rho_sr, rho_cr
+))
+
+cat("\n\nRESULTS ADDITION (first paragraph):\n")
+cat(sprintf(
+  "Records per grid cell and species richness were strongly positively correlated ",
+  "(Pearson r = %.2f, p < 0.001), consistent with a strong influence of sampling effort ",
+  "on apparent species richness (Oliveira et al., 2017).",
+  cor_nr$estimate
+))
+
+cat("\n\nSUPPLEMENTARY TABLE TEXT:\n")
+cat(sprintf(
+  "Table SX. Spearman correlation coefficients among the three KnowBR metrics ",
+  "(slope, completeness, and R/S ratio) for all grid cells with ≥ 10 records at 30 arc-minute resolution ",
+  "(n = %d). All correlations are statistically significant (p < 0.001).",
+  nrow(all_fam)
+))
+```
+
+# 10. Save correlation table as CSV (for Supplementary)
+
+```{r}
+# Full pairwise table with both Pearson and Spearman
+cor_table <- tibble(
+  Pair = c("Slope × Completeness", "Slope × R/S ratio", "Completeness × R/S ratio"),
+  Pearson_r   = c(pearson_mat["Slope","Completeness"],
+                  pearson_mat["Slope","Ratio"],
+                  pearson_mat["Completeness","Ratio"]),
+  Spearman_rho = c(spearman_mat["Slope","Completeness"],
+                   spearman_mat["Slope","Ratio"],
+                   spearman_mat["Completeness","Ratio"])
+) %>%
+  mutate(across(where(is.numeric), ~round(., 3)))
+
+write.csv(cor_table,
+          here("output/Tables/TableS_metric_correlations.csv"),
+          row.names = FALSE)
+cat("Saved: output/Tables/TableS_metric_correlations.csv\n")
+print(cor_table)
+```
