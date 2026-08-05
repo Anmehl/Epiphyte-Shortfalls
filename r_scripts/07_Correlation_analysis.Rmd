@@ -5,10 +5,7 @@ date: "2025-08"
 output: html_document
 ---
 
-This script addresses Reviewer 1's comment (Pg8 ln156): "I have strong concerns that the
-metrics being used to assess inventory completeness are highly correlated, and may therefore
-be reflecting similar or redundant patterns. I recommend that the authors conduct a
-correlation analysis to assess the degree of overlap among these metrics."
+This script addresses Reviewer 1's comment (Pg8 ln156): "I have strong concerns that the metrics being used to assess inventory completeness are highly correlated, and may therefore be reflecting similar or redundant patterns. I recommend that the authors conduct a correlation analysis to assess the degree of overlap among these metrics."
 
 It also addresses:
 - Reviewer 1 Pg10 ln196: median vs. mean + histogram of records distribution
@@ -196,18 +193,19 @@ ggsave(here("output/figures/FigS_metric_correlations_all_families.jpg"),
 # 7. Correlation heatmap (publication quality)
 
 ```{r fig.width=6, fig.height=5}
+dev.off()  
+
 jpeg(here("output/figures/FigS_corrplot_metrics.jpg"), width = 600, height = 500, quality = 95)
 corrplot::corrplot.mixed(
   spearman_mat,
-  lower       = "ellipse",
-  upper       = "number",
-  tl.col      = "black",
-  tl.cex      = 1.1,
-  number.cex  = 1.2,
-  cl.cex      = 0.9,
-  col         = corrplot::COL2("RdBu", 10),
-  title       = "Spearman correlations: slope × completeness × R/S ratio",
-  mar         = c(0, 0, 2, 0)
+  lower      = "ellipse",
+  upper      = "number",
+  tl.col     = "black",
+  tl.cex     = 1.1,
+  number.cex = 1.2,
+  cl.cex     = 0.9,
+  title      = "Spearman correlations: slope × completeness × R/S ratio",
+  mar        = c(0, 0, 2, 0)
 )
 dev.off()
 ```
