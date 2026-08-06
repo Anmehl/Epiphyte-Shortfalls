@@ -1,0 +1,220 @@
+---
+title: "Biogeographic provinces of the Neotropics"
+author: "Maria Carmona-Higuita"
+date: "2026-08"
+output: html_document
+---
+
+This script addresses Reviewer 1 (Pg14 ln267): "Many regional names are mentioned
+that may be unfamiliar to readers not well-versed in the geography of the study area.
+Including a figure in the main manuscript to illustrate these 'provinces' would
+greatly aid reader comprehension."
+
+Produces Fig. SX (or main text figure): a labeled map of Morrone et al. (2022)
+biogeographic provinces used in this study, colored by subregion.
+
+```{r setup, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(sf)
+library(here)
+library(ggplot2)
+library(ggrepel)
+library(rnaturalearth)
+library(rnaturalearthdata)
+library(MetBrewer)
+
+dir.create(here("output/figures"), recursive = TRUE, showWarnings = FALSE)
+```
+
+# 1. Load province polygons
+
+```{r}
+# Province shapefile (Morrone et al. 2022), saved by Script 06 in LAEA CRS
+poly_laea <- st_read(here("output/Allmetrics30/poly_laea.shp"), quiet = TRUE)
+
+# Reproject to WGS84 for ggplot2 / Behrmann
+poly_wgs <- poly_laea %>%
+  filter(Subregion != "N/A") %>%
+  st_transform(crs = 4326) %>%
+  st_make_valid()
+
+cat("Provinces:", nrow(poly_wgs), "\n")
+cat("Subregions:", paste(unique(poly_wgs$Subregion), collapse = ", "), "\n")
+```
+
+# 2. Compute centroids for labels
+
+```{r}
+# Provinces to label explicitly (those mentioned in Discussion or Results)
+label_map <- c(
+  "Sierra Madre Oriental province"       = "Sierra Madre\nOriental",
+  "Sierra Madre Occidental province"     = "Sierra Madre\nOccidental",
+  "Transmexican Volcanic Belt province"  = "Transmexican\nVolcanic Belt",
+  "Chiapas Highlands province"           = "Chiapas\nHighlands",
+  "Veracruzan province"                  = "Veracruz",
+  "Guatuso-Talamanca province"           = "Guatuso-\nTalamanca",
+  "Puntarenas-Chiriqui province"         = "Puntarenas-\nChiriqui",
+  "Puerto Rico province"                 = "Puerto Rico",
+  "Yungas province"                      = "Yungas",
+  "Paramo province"                      = "Páramo",
+  "Atlantic province"                    = "Atlantic\nForest",
+  "Cerrado province"                     = "Cerrado",
+  "Chapada Diamantina province"          = "Chapada\nDiamantina",
+  "Napo province"                        = "Napo",
+  "Imeri province"                       = "Imeri",
+  "Guianan Lowlands province"            = "Guianan\nLowlands",
+  "Comechingones province"               = "Comechingones",
+  "Cauca province"                       = "Cauca",
+  "Rondonia province"                    = "Rondônia",
+  "Xingu-Tapajos province"               = "Xingu-\nTapajós",
+  "Madeira province"                     = "Madeira",
+  "Venezuelan province"                  = "Venezuelan"
+)
+
+centroids <- poly_wgs %>%
+  filter(Provincias %in% names(label_map)) %>%
+  mutate(
+    label = label_map[Provincias],
+    geometry_centroid = st_centroid(geometry)
+  ) %>%
+  mutate(
+    lon = st_coordinates(geometry_centroid)[, 1],
+    lat = st_coordinates(geometry_centroid)[, 2]
+  ) %>%
+  st_drop_geometry()
+```
+
+# 3. Color palette by subregion
+
+```{r}
+# 5 subregions — palette from MetBrewer "Morgenstern" (earth tones)
+subregion_levels <- c(
+  "Brazilian",
+  "Chacoan",
+  "Antillean",
+  "Mexican Transition Zone",
+  "South American Transition Zone"
+)
+
+subregion_colors <- c(
+  "Brazilian"                       = "#4E8B3F",
+  "Chacoan"                         = "#C9A84C",
+  "Antillean"                       = "#5B8DB8",
+  "Mexican Transition Zone"         = "#C46B39",
+  "South American Transition Zone"  = "#9B6B9B"
+)
+
+poly_wgs <- poly_wgs %>%
+  mutate(Subregion = factor(Subregion, levels = subregion_levels))
+```
+
+# 4. World background
+
+```{r}
+world <- ne_countries(scale = 110, returnclass = "sf") %>%
+  st_transform(crs = 4326)
+
+# Neotropics bounding box
+bbox <- c(xmin = -120, xmax = -30, ymin = -57, ymax = 34)
+```
+
+# 5. Map
+
+```{r fig.width=12, fig.height=9}
+p <- ggplot() +
+  # Ocean background
+  theme(panel.background = element_rect(fill = "#D6EAF8")) +
+
+  # World countries (gray base)
+  geom_sf(data = world, fill = "#F0EDE5", color = "#CCCCCC", linewidth = 0.15) +
+
+  # Province polygons colored by subregion
+  geom_sf(data = poly_wgs,
+          aes(fill = Subregion),
+          color = "white", linewidth = 0.3, alpha = 0.88) +
+
+  # Province boundaries on top (thin)
+  geom_sf(data = poly_wgs,
+          fill = NA, color = "#555555", linewidth = 0.2) +
+
+  # Country outlines on top
+  geom_sf(data = world, fill = NA, color = "#888888", linewidth = 0.25) +
+
+  # Province labels (repelled)
+  geom_label_repel(
+    data        = centroids,
+    aes(x = lon, y = lat, label = label),
+    size        = 2.8,
+    family      = "EB Garamond",
+    fontface    = "bold",
+    fill        = alpha("white", 0.75),
+    label.size  = 0.15,
+    label.r     = unit(0.1, "lines"),
+    box.padding = 0.3,
+    min.segment.length = 0.2,
+    segment.color = "#444444",
+    segment.size  = 0.3,
+    max.overlaps  = 20,
+    seed          = 42
+  ) +
+
+  # Color scale
+  scale_fill_manual(
+    values = subregion_colors,
+    name   = "Subregion\n(Morrone et al., 2022)"
+  ) +
+
+  # Spatial limits
+  coord_sf(xlim = c(bbox["xmin"], bbox["xmax"]),
+           ylim = c(bbox["ymin"], bbox["ymax"]),
+           expand = FALSE) +
+
+  labs(
+    title    = NULL,
+    x        = "Longitude",
+    y        = "Latitude"
+  ) +
+
+  theme_classic(base_family = "EB Garamond") +
+  theme(
+    panel.background   = element_rect(fill = "#D6EAF8", color = NA),
+    panel.border       = element_rect(color = "#444444", fill = NA, linewidth = 0.5),
+    panel.grid.major   = element_line(color = "white", linewidth = 0.3),
+    axis.text          = element_text(size = 9),
+    axis.title         = element_text(size = 10),
+    legend.title       = element_text(size = 9.5, face = "bold"),
+    legend.text        = element_text(size = 8.5),
+    legend.position    = "right",
+    legend.key.size    = unit(0.55, "cm"),
+    legend.background  = element_rect(fill = alpha("white", 0.85),
+                                      color = "#cccccc", linewidth = 0.3)
+  )
+
+print(p)
+
+ggsave(here("output/figures/Fig_biogeographic_provinces.jpg"),
+       plot = p, width = 12, height = 9, dpi = 300,
+       bg = "white")
+cat("Saved: output/figures/Fig_biogeographic_provinces.jpg\n")
+```
+
+# 6. Province count summary
+
+```{r}
+cat("=== Province counts by subregion ===\n")
+poly_wgs %>%
+  st_drop_geometry() %>%
+  count(Subregion, name = "n_provinces") %>%
+  arrange(desc(n_provinces)) %>%
+  print()
+
+cat("\n=== Figure caption (draft) ===\n")
+cat(
+"Figure SX. Biogeographic provinces of the Neotropics following Morrone et al. (2022).
+Provinces are colored by subregion: Brazilian (green), Chacoan (ochre),
+Antillean (blue), Mexican Transition Zone (terracotta), and
+South American Transition Zone (purple). Labels indicate the provinces
+most frequently referenced in this study. The analysis was conducted
+at a 30 arc-minute grid cell resolution across all ", nrow(poly_wgs),
+" provinces shown.\n", sep = "")
+```
