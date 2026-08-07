@@ -1,0 +1,274 @@
+---
+title: "Script 10 – Supplementary Figures S5–S8"
+output: html_notebook
+editor_options: 
+  chunk_output_type: inline
+---
+
+# Script 10: Supplementary Figures S5–S8
+#
+# Generates the four new supplementary map figures for the DDI resubmission:
+#   S5.1 – Geographic distribution of occurrence records     (6 panels: Total + 5 families)
+#   S6.1 – Sampling completeness / slope proxy               (6 panels, 3 categories)
+#   S7.1 – Distributional knowledge gaps / Wallacean proxy   (6 panels, 3 categories)
+#   S8.1 – Spatial clustering of inventory completeness      (1 panel, all families)
+#
+# Projection: Mollweide equal-area centered at −75° lon (DDI requirement)
+# Data:       30 arc-min, output/completeness/Main30exp/EstimatorsAllFamilies.RData
+#
+# Run from project root with the Epiphyte-Shortfalls.Rproj open.
+# Output saved to: output/figures/
+
+```{r setup, message=FALSE, warning=FALSE}
+library(here)
+library(tidyverse)
+library(sf)
+library(patchwork)
+library(MetBrewer)
+
+dir.create(here("output/figures"), recursive = TRUE, showWarnings = FALSE)
+
+# Mollweide equal-area projection centered at −75° (matches Script 09)
+crs_moll <- "+proj=moll +lon_0=-75 +datum=WGS84 +units=m +no_defs"
+```
+
+```{r load-data}
+# ── 1. Survey completeness estimators (All_Families + 5 individual families) ──
+load(here("output/completeness/Main30exp/EstimatorsAllFamilies.RData"))
+# Object name: EstimatorsAllFamilies
+# Expected columns: Family, Longitude, Latitude, Records, Observed.richness,
+#                   Slope, Completeness  (Ratio computed below)
+
+# ── 2. Province polygons (saved by Script 06 in EPSG:3575; reproject to WGS84) ──
+poly_wgs <- st_read(here("output/Allmetrics30/poly_laea.shp"), quiet = TRUE) %>%
+  st_transform(crs = 4326)
+
+# ── 3. Compute shortfall categories and convert to sf ────────────────────────
+datos_sf <- EstimatorsAllFamilies %>%
+  filter(!is.na(Longitude), !is.na(Latitude)) %>%
+  mutate(
+    # Occurrences-to-species ratio (used in Wallacean classification)
+    Ratio = if_else(
+      !is.na(Records) & !is.na(Observed.richness) & Observed.richness > 0,
+      Records / Observed.richness,
+      NA_real_
+    ),
+
+    # S6 – Sampling completeness (slope-based proxy)
+    # Thresholds match Script 06: slope < 0.02 → well-surveyed; > 0.30 → poorly-surveyed
+    slope_cat = case_when(
+      is.na(Slope)  ~ NA_character_,
+      Slope < 0.02  ~ "Well-surveyed",
+      Slope > 0.30  ~ "Poorly-surveyed",
+      TRUE          ~ "Fairly-surveyed"
+    ),
+    slope_cat = factor(slope_cat,
+                       levels = c("Well-surveyed", "Fairly-surveyed", "Poorly-surveyed")),
+
+    # S7 – Wallacean shortfall (completeness + ratio)
+    # Thresholds match Script 06: Completeness > 90 & Ratio > 15 → well; < 50 & < 3 → poorly
+    wall_cat = case_when(
+      is.na(Completeness) | is.na(Ratio)   ~ NA_character_,
+      Completeness > 90  & Ratio > 15       ~ "Well-surveyed",
+      Completeness < 50  & Ratio < 3        ~ "Poorly-surveyed",
+      TRUE                                  ~ "Fairly-surveyed"
+    ),
+    wall_cat = factor(wall_cat,
+                      levels = c("Well-surveyed", "Fairly-surveyed", "Poorly-surveyed"))
+  ) %>%
+  st_as_sf(coords = c("Longitude", "Latitude"), crs = 4326)
+
+cat("Families in data:", paste(sort(unique(datos_sf$Family)), collapse = ", "), "\n")
+cat("Total rows:", nrow(datos_sf), "\n")
+```
+
+```{r helpers}
+# ── Panel order and display labels ────────────────────────────────────────────
+fam_order  <- c("All_Families", "Araceae", "Bromeliaceae",
+                "Orchidaceae",  "Piperaceae", "Polypodiaceae")
+fam_labels <- c("Total",       "Araceae", "Bromeliaceae",
+                "Orchidaceae",  "Piperaceae", "Polypodiaceae")
+names(fam_labels) <- fam_order
+
+# 3-category palette (S6 and S7)
+cat_cols <- c(
+  "Well-surveyed"   = "#1B9E77",   # teal
+  "Fairly-surveyed" = "#FFC107",   # amber
+  "Poorly-surveyed" = "#D32F2F"    # red
+)
+
+# Base map theme
+theme_map <- theme_void() +
+  theme(
+    panel.border     = element_rect(color = "grey50", fill = NA, linewidth = 0.4),
+    plot.title       = element_text(hjust = 0.5, size = 8.5, face = "bold"),
+    legend.position  = "none"
+  )
+
+# ── Helper: one categorical panel (slope_cat or wall_cat) ────────────────────
+make_cat_panel <- function(fam, dat, poly, col_var, palette) {
+  d <- dat %>% filter(Family == fam, !is.na(.data[[col_var]]))
+  ggplot() +
+    geom_sf(data = poly, fill = "grey92", color = "grey70", linewidth = 0.15) +
+    geom_sf(data = d, aes(color = .data[[col_var]]), size = 0.45, alpha = 0.85) +
+    scale_color_manual(values = palette, drop = FALSE) +
+    coord_sf(crs = crs_moll, expand = FALSE) +
+    theme_map +
+    labs(title = fam_labels[fam])
+}
+
+# ── Helper: one occurrence-records panel (log-scale color) ───────────────────
+make_rec_panel <- function(fam, dat, poly) {
+  d <- dat %>% filter(Family == fam, !is.na(Records), Records > 0)
+  ggplot() +
+    geom_sf(data = poly, fill = "grey92", color = "grey70", linewidth = 0.15) +
+    geom_sf(data = d, aes(color = log10(Records)), size = 0.45, alpha = 0.85) +
+    scale_color_gradientn(
+      colors   = MetBrewer::met.brewer("Hiroshige", direction = -1),
+      name     = "log₁₀(Records)",
+      na.value = NA
+    ) +
+    coord_sf(crs = crs_moll, expand = FALSE) +
+    theme_map +
+    labs(title = fam_labels[fam])
+}
+```
+
+```{r figure-s5, fig.width=11, fig.height=8, message=FALSE, warning=FALSE}
+# ── Figure S5.1: Geographic distribution of occurrence records ───────────────
+
+panels_s5 <- map(fam_order, ~make_rec_panel(.x, datos_sf, poly_wgs))
+
+# One panel with legend visible (used only to extract the legend guide)
+legend_panel_s5 <- make_rec_panel("All_Families", datos_sf, poly_wgs) +
+  theme(legend.position = "bottom",
+        legend.title = element_text(size = 8),
+        legend.text  = element_text(size = 7))
+
+fig_s5 <- wrap_plots(panels_s5, ncol = 3) &
+  theme(legend.position = "none")
+
+# Add a legend row at the bottom using patchwork
+fig_s5_final <- fig_s5 /
+  (ggplot() + theme_void()) +
+  plot_layout(heights = c(1, 1, 0.05))
+
+# Simpler: just use guides = "collect"
+fig_s5_legend <- (
+  (make_rec_panel("All_Families", datos_sf, poly_wgs) | make_rec_panel("Araceae", datos_sf, poly_wgs) | make_rec_panel("Bromeliaceae", datos_sf, poly_wgs)) /
+  (make_rec_panel("Orchidaceae",  datos_sf, poly_wgs) | make_rec_panel("Piperaceae",  datos_sf, poly_wgs) | make_rec_panel("Polypodiaceae", datos_sf, poly_wgs))
+) +
+  plot_layout(guides = "collect") &
+  theme(legend.position = "bottom",
+        legend.title = element_text(size = 8),
+        legend.text  = element_text(size = 7)) &
+  scale_color_gradientn(
+    colors   = MetBrewer::met.brewer("Hiroshige", direction = -1),
+    name     = "log₁₀(Occurrence records)",
+    na.value = NA
+  )
+
+ggsave(here("output/figures/FigS5_occurrence_records.jpg"),
+       fig_s5_legend, width = 11, height = 8, dpi = 300)
+cat("✓ Saved FigS5_occurrence_records.jpg\n")
+```
+
+```{r figure-s6, fig.width=11, fig.height=8, message=FALSE, warning=FALSE}
+# ── Figure S6.1: Sampling completeness (slope-based proxy) ───────────────────
+
+fig_s6 <- (
+  (make_cat_panel("All_Families", datos_sf, poly_wgs, "slope_cat", cat_cols) |
+   make_cat_panel("Araceae",      datos_sf, poly_wgs, "slope_cat", cat_cols) |
+   make_cat_panel("Bromeliaceae", datos_sf, poly_wgs, "slope_cat", cat_cols)) /
+  (make_cat_panel("Orchidaceae",  datos_sf, poly_wgs, "slope_cat", cat_cols) |
+   make_cat_panel("Piperaceae",   datos_sf, poly_wgs, "slope_cat", cat_cols) |
+   make_cat_panel("Polypodiaceae",datos_sf, poly_wgs, "slope_cat", cat_cols))
+) +
+  plot_layout(guides = "collect") &
+  theme(legend.position = "bottom",
+        legend.title    = element_text(size = 9),
+        legend.text     = element_text(size = 8)) &
+  scale_color_manual(
+    values = cat_cols,
+    name   = "Sampling completeness",
+    drop   = FALSE
+  )
+
+ggsave(here("output/figures/FigS6_sampling_completeness.jpg"),
+       fig_s6, width = 11, height = 8, dpi = 300)
+cat("✓ Saved FigS6_sampling_completeness.jpg\n")
+```
+
+```{r figure-s7, fig.width=11, fig.height=8, message=FALSE, warning=FALSE}
+# ── Figure S7.1: Distributional knowledge gaps (Wallacean shortfall) ─────────
+
+fig_s7 <- (
+  (make_cat_panel("All_Families", datos_sf, poly_wgs, "wall_cat", cat_cols) |
+   make_cat_panel("Araceae",      datos_sf, poly_wgs, "wall_cat", cat_cols) |
+   make_cat_panel("Bromeliaceae", datos_sf, poly_wgs, "wall_cat", cat_cols)) /
+  (make_cat_panel("Orchidaceae",  datos_sf, poly_wgs, "wall_cat", cat_cols) |
+   make_cat_panel("Piperaceae",   datos_sf, poly_wgs, "wall_cat", cat_cols) |
+   make_cat_panel("Polypodiaceae",datos_sf, poly_wgs, "wall_cat", cat_cols))
+) +
+  plot_layout(guides = "collect") &
+  theme(legend.position = "bottom",
+        legend.title    = element_text(size = 9),
+        legend.text     = element_text(size = 8)) &
+  scale_color_manual(
+    values = cat_cols,
+    name   = "Distributional knowledge gap",
+    drop   = FALSE
+  )
+
+ggsave(here("output/figures/FigS7_wallacean_shortfall.jpg"),
+       fig_s7, width = 11, height = 8, dpi = 300)
+cat("✓ Saved FigS7_wallacean_shortfall.jpg\n")
+```
+
+```{r figure-s8, fig.width=7, fig.height=6, message=FALSE, warning=FALSE}
+# ── Figure S8.1: Spatial clustering of inventory completeness ─────────────────
+# Uses sf_Hotspots_30.Rdata (saved by Script 05)
+# Shows significant hotspot (local G* > 1.96) and coldspot (< −1.96) clusters
+# of inventory completeness; neutral cells omitted.
+
+load(here("output/sf_Hotspots_30.Rdata"))   # loads: sf_final
+
+hot_sf <- sf_final %>%
+  filter(Completeness_class != "Neutral") %>%
+  mutate(Completeness_class = factor(Completeness_class,
+                                     levels = c("Hotspot", "Coldspot")))
+
+fig_s8 <- ggplot() +
+  geom_sf(data  = poly_wgs,
+          fill  = "grey92", color = "grey70", linewidth = 0.15) +
+  geom_sf(data  = hot_sf,
+          aes(color = Completeness_class),
+          size  = 0.8, alpha = 0.9) +
+  scale_color_manual(
+    values = c("Hotspot" = "#D32F2F", "Coldspot" = "#1565C0"),
+    name   = "Cluster type"
+  ) +
+  coord_sf(crs = crs_moll, expand = FALSE) +
+  theme_void() +
+  theme(
+    panel.border    = element_rect(color = "grey50", fill = NA, linewidth = 0.4),
+    legend.position = "bottom",
+    legend.title    = element_text(size = 9),
+    legend.text     = element_text(size = 8)
+  )
+
+ggsave(here("output/figures/FigS8_hotspots_completeness.jpg"),
+       fig_s8, width = 7, height = 6, dpi = 300)
+cat("✓ Saved FigS8_hotspots_completeness.jpg\n")
+```
+
+```{r summary}
+cat("\n── Script 10 complete ────────────────────────────────────────────\n")
+cat("Files saved to output/figures/:\n")
+cat("  FigS5_occurrence_records.jpg    → insert as S5.1\n")
+cat("  FigS6_sampling_completeness.jpg → insert as S6.1\n")
+cat("  FigS7_wallacean_shortfall.jpg   → insert as S7.1\n")
+cat("  FigS8_hotspots_completeness.jpg → insert as S8.1\n\n")
+cat("Once you run the script, send me the 4 jpg files and I will\n")
+cat("replace the old images in DDI_Supporting_Information_v3.docx.\n")
+```
