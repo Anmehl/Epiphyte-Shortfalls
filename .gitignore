@@ -34,3 +34,4 @@ po/*~
 # RStudio Connect folder
 rsconnect/
 Species per site.CSV
+data/occ_epIGbackbone.Rdata
