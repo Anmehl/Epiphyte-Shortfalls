@@ -32,10 +32,11 @@ dir.create(here("output/figures"), recursive = TRUE, showWarnings = FALSE)
 # Province shapefile (Morrone et al. 2022), saved by Script 06 in LAEA CRS
 poly_laea <- st_read(here("output/Allmetrics30/poly_laea.shp"), quiet = TRUE)
 
-# Reproject to WGS84 for ggplot2 / Behrmann
+# Reproject to Mollweide equal-area (DDI requires equal-area for continental maps)
+crs_mollweide <- "+proj=moll +lon_0=-75 +datum=WGS84 +units=m +no_defs"
 poly_wgs <- poly_laea %>%
   filter(Subregion != "N/A") %>%
-  st_transform(crs = 4326) %>%
+  st_transform(crs = crs_mollweide) %>%
   st_make_valid()
 
 cat("Provinces:", nrow(poly_wgs), "\n")
@@ -112,10 +113,7 @@ poly_wgs <- poly_wgs %>%
 
 ```{r}
 world <- ne_countries(scale = 110, returnclass = "sf") %>%
-  st_transform(crs = 4326)
-
-# Neotropics bounding box
-bbox <- c(xmin = -120, xmax = -30, ymin = -57, ymax = 34)
+  st_transform(crs = crs_mollweide)
 ```
 
 # 5. Map
@@ -164,15 +162,14 @@ p <- ggplot() +
     name   = "Subregion\n(Morrone et al., 2022)"
   ) +
 
-  # Spatial limits
-  coord_sf(xlim = c(bbox["xmin"], bbox["xmax"]),
-           ylim = c(bbox["ymin"], bbox["ymax"]),
+  # Spatial limits — Mollweide equal-area projection (DDI requirement)
+  coord_sf(crs = crs_mollweide,
            expand = FALSE) +
 
   labs(
     title    = NULL,
-    x        = "Longitude",
-    y        = "Latitude"
+    x        = NULL,
+    y        = NULL
   ) +
 
   theme_classic(base_family = "EB Garamond") +
