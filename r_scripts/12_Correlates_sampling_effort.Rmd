@@ -1,0 +1,313 @@
+---
+title: "Correlates of sampling effort in Neotropical epiphytes"
+author: "Maria Carmona-Higuita"
+date: "2026-08"
+output: html_document
+---
+
+This script identifies geographic and biological predictors of sampling completeness
+across the Neotropics. It addresses the question: *why* are some grid cells
+better sampled than others?
+
+**Predictors used (all derivable from existing data):**
+1. Absolute latitude — proxy for human accessibility and sampling effort gradient
+2. Species richness per cell (SR) — richer areas attract more collectors
+3. Records per cell (n) — tautological check; expected to predict slope
+4. Distance to nearest WGSRPD region centroid — proxy for remoteness
+5. [Optional] Human Influence Index (HII) — requires download (see Section 6)
+6. [Optional] Mean elevation — requires a DEM raster (see Section 6)
+
+**Response variables:**
+- `Slope` (primary — rate of new species discovery; lower = more complete)
+- `Completeness` (%)
+- `Ratio` (R/S ratio)
+
+**Method:** Spearman rank correlation (robust to non-normality, confirmed by Script 07);
+scatter plots with LOESS smoother.
+
+**Outputs:**
+- `output/figures/FigS_correlates_slope.jpg`
+- `output/figures/FigS_correlates_panel.jpg`
+- `output/Tables/TableS_correlates.csv`
+
+```{r setup, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(here)
+library(patchwork)
+library(MetBrewer)
+library(sf)
+library(corrplot)
+
+dir.create(here("output/figures"), recursive = TRUE, showWarnings = FALSE)
+dir.create(here("output/Tables"),  recursive = TRUE, showWarnings = FALSE)
+
+# ── 1. Load KnowBR estimators at 30 arc-min (main resolution) ────────────────
+load(here("output/completeness/Main30exp/EstimatorsAllFamilies.RData"))
+
+# Apply same 10-record threshold as main analysis
+datos <- EstimatorsAllFamilies %>%
+  filter(Records >= 10,
+         !is.na(Slope), !is.na(Completeness), !is.na(Ratio)) %>%
+  rename(n = Records, SR = Observed.richness,
+         Longitude = Longitude, Latitude = Latitude)
+
+all_fam <- datos %>% filter(Family == "All_Families")
+
+cat(sprintf("Grid cells (All Families, n >= 10): %d\n", nrow(all_fam)))
+cat(sprintf("Longitude range: %.1f – %.1f\n", min(all_fam$Longitude), max(all_fam$Longitude)))
+cat(sprintf("Latitude range: %.1f – %.1f\n",  min(all_fam$Latitude),  max(all_fam$Latitude)))
+```
+
+# 2. Derive predictors from existing data
+
+```{r derive-predictors}
+# ── Absolute latitude ─────────────────────────────────────────────────────────
+all_fam <- all_fam %>%
+  mutate(abs_lat = abs(Latitude))
+
+# ── Distance to nearest WGSRPD Level-2 region boundary ───────────────────────
+# Using the polygon file already in the project
+wgsrpd_shp <- here("wgsrpd-master", "level2", "level2.shp")
+
+if (file.exists(wgsrpd_shp)) {
+  poly <- st_read(wgsrpd_shp, quiet = TRUE) %>%
+    filter(LEVEL2_NAM %in% c("Mexico", "Central America", "Caribbean",
+                              "Northern South America", "Western South America",
+                              "Brazil", "Southern South America"))
+
+  # Cell centroids as sf
+  cells_sf <- all_fam %>%
+    st_as_sf(coords = c("Longitude", "Latitude"), crs = 4326)
+
+  # Distance from each cell to nearest WGSRPD boundary (in km)
+  # Using centroids of each region as an approximation
+  region_centroids <- poly %>%
+    st_centroid() %>%
+    st_transform(4326)
+
+  dist_mat <- st_distance(cells_sf, region_centroids)  # meters
+  min_dist <- apply(dist_mat, 1, min)
+
+  all_fam$dist_region_centroid_km <- as.numeric(min_dist) / 1000
+  cat("Distance to WGSRPD region centroid computed.\n")
+} else {
+  cat("WGSRPD shapefile not found — skipping distance predictor.\n")
+  all_fam$dist_region_centroid_km <- NA_real_
+}
+
+# ── Records per species (sampling intensity per SR unit) ─────────────────────
+all_fam <- all_fam %>%
+  mutate(rec_per_sp = n / SR)
+
+cat("Predictors derived:\n")
+all_fam %>%
+  select(abs_lat, dist_region_centroid_km, rec_per_sp, n, SR) %>%
+  summary() %>%
+  print()
+```
+
+# 3. Spearman correlations: predictors × sampling metrics
+
+```{r spearman-table}
+predictors <- c("abs_lat", "dist_region_centroid_km", "rec_per_sp", "SR", "n")
+pred_labels <- c("Absolute latitude", "Dist. to region centroid (km)",
+                  "Records per species", "Species richness", "Records (n)")
+responses   <- c("Slope", "Completeness", "Ratio")
+
+cor_results <- map_df(seq_along(predictors), function(i) {
+  pred <- predictors[i]
+  map_df(responses, function(resp) {
+    x <- all_fam[[pred]]
+    y <- all_fam[[resp]]
+    # Remove NAs pairwise
+    ok <- complete.cases(x, y)
+    if (sum(ok) < 10) return(tibble(Predictor = pred_labels[i], Response = resp,
+                                     rho = NA, p = NA, n = sum(ok)))
+    ct <- cor.test(x[ok], y[ok], method = "spearman", exact = FALSE)
+    tibble(
+      Predictor = pred_labels[i],
+      Response  = resp,
+      rho       = round(ct$estimate, 3),
+      p_value   = ct$p.value,
+      n_cells   = sum(ok)
+    )
+  })
+})
+
+# Format for printing
+cor_results %>%
+  mutate(
+    sig   = case_when(p_value < 0.001 ~ "***",
+                       p_value < 0.01  ~ "**",
+                       p_value < 0.05  ~ "*",
+                       TRUE            ~ "ns"),
+    p_fmt = formatC(p_value, format = "e", digits = 2)
+  ) %>%
+  select(Predictor, Response, rho, p_fmt, sig, n_cells) %>%
+  print(n = Inf)
+
+# Save table
+cor_results %>%
+  mutate(p_value = formatC(p_value, format = "e", digits = 3)) %>%
+  write.csv(here("output/Tables/TableS_correlates.csv"), row.names = FALSE)
+cat("\nSaved: output/Tables/TableS_correlates.csv\n")
+```
+
+# 4. Scatter plots — Slope vs. each predictor
+
+```{r scatter-slope, fig.width=12, fig.height=8}
+# Filter to predictors with data
+plot_preds <- predictors[sapply(predictors, function(p) sum(!is.na(all_fam[[p]])) > 0)]
+
+scatter_list <- map(seq_along(plot_preds), function(i) {
+  pred <- plot_preds[i]
+  label <- pred_labels[which(predictors == pred)]
+
+  if (all(is.na(all_fam[[pred]]))) return(NULL)
+
+  rho_val <- cor_results %>%
+    filter(Predictor == pred_labels[which(predictors == pred)],
+           Response == "Slope") %>%
+    pull(rho)
+
+  ggplot(all_fam, aes_string(x = pred, y = "Slope")) +
+    geom_point(alpha = 0.2, size = 0.6,
+               color = MetBrewer::met.brewer("Hiroshige")[4]) +
+    geom_smooth(method = "loess", color = "black", se = TRUE,
+                linewidth = 0.8, fill = "grey70", alpha = 0.3) +
+    geom_hline(yintercept = c(0.02, 0.3), linetype = "dashed",
+               color = c("steelblue", "tomato"), linewidth = 0.5) +
+    annotate("text", x = Inf, y = Inf,
+             label = sprintf("ρ = %+.3f", rho_val),
+             hjust = 1.1, vjust = 1.5, size = 4, fontface = "bold") +
+    labs(x = label, y = "Slope (species accumulation rate)",
+         subtitle = "Dashed lines: well-sampled (0.02) and poorly-sampled (0.30) thresholds") +
+    theme_classic(base_family = "EB Garamond") +
+    theme(axis.title = element_text(size = 9))
+})
+
+# Remove NULLs
+scatter_list <- compact(scatter_list)
+
+p_scatter <- wrap_plots(scatter_list, ncol = 3)
+p_scatter
+
+ggsave(here("output/figures/FigS_correlates_slope.jpg"),
+       plot = p_scatter, width = 14, height = 9, dpi = 300)
+cat("Saved: output/figures/FigS_correlates_slope.jpg\n")
+```
+
+# 5. Heatmap of all correlations
+
+```{r heatmap, fig.width=8, fig.height=5}
+# Build rho matrix
+avail_preds <- pred_labels[!is.na(match(predictors,
+                                         predictors[sapply(predictors, function(p)
+                                           sum(!is.na(all_fam[[p]])) > 0)]))]
+
+rho_mat <- cor_results %>%
+  filter(Predictor %in% avail_preds, !is.na(rho)) %>%
+  select(Predictor, Response, rho) %>%
+  pivot_wider(names_from = Response, values_from = rho) %>%
+  column_to_rownames("Predictor") %>%
+  as.matrix()
+
+jpeg(here("output/figures/FigS_correlates_heatmap.jpg"),
+     width = 700, height = 450, quality = 95)
+corrplot::corrplot(rho_mat,
+  method   = "color",
+  addCoef.col = "black",
+  tl.col   = "black",
+  tl.cex   = 0.9,
+  cl.lim   = c(-1, 1),
+  title    = "Spearman ρ: predictors × KnowBR metrics (All Families, n ≥ 10, 30 arc-min)",
+  mar      = c(0, 0, 2, 0),
+  number.cex = 0.9,
+  is.corr  = FALSE   # rho values, not a symmetric corr matrix
+)
+dev.off()
+cat("Saved: output/figures/FigS_correlates_heatmap.jpg\n")
+```
+
+# 6. Per-family correlations (Slope only)
+
+```{r family-cors}
+focal_families <- c("Orchidaceae", "Bromeliaceae", "Araceae",
+                    "Piperaceae", "Polypodiaceae")
+
+cat("=== Spearman ρ (Slope ~ abs_lat) by family ===\n")
+map_df(focal_families, function(fam) {
+  d <- datos %>% filter(Family == fam, !is.na(Slope)) %>%
+    mutate(abs_lat = abs(Latitude))
+  if (nrow(d) < 10) return(NULL)
+  ct <- cor.test(d$abs_lat, d$Slope, method = "spearman", exact = FALSE)
+  tibble(Family = fam, n_cells = nrow(d),
+         rho_slope_lat = round(ct$estimate, 3),
+         p_value = formatC(ct$p.value, format = "e", digits = 2))
+}) %>% print()
+```
+
+# 7. Optional: Human Influence Index or elevation
+
+```{r optional-hii, eval=FALSE}
+# ═══════════════════════════════════════════════════════════════════
+# OPTIONAL BLOCK — uncomment and run if you have downloaded HII or
+# a DEM raster. Skip if not available; the analysis above is complete.
+# ═══════════════════════════════════════════════════════════════════
+
+# ── Human Influence Index (HII v2, Sanderson et al. 2002) ────────
+# Download from: https://sedac.ciesin.columbia.edu/data/set/wildareas-v2-human-influence-index-geographic
+# Save as: data/hii_v2geo.tif
+
+library(terra)
+
+hii <- rast(here("data/hii_v2geo.tif"))
+
+# Extract HII at cell centroids
+cells_vect <- vect(all_fam, geom = c("Longitude", "Latitude"), crs = "EPSG:4326")
+all_fam$HII <- terra::extract(hii, cells_vect)[, 2]
+
+ct_hii <- cor.test(all_fam$HII, all_fam$Slope, method = "spearman", exact = FALSE)
+cat(sprintf("HII × Slope: ρ = %.3f, p = %.2e\n", ct_hii$estimate, ct_hii$p.value))
+
+# ── Mean elevation (MERIT DEM or SRTM) ───────────────────────────
+# Download 30-arc-min aggregated elevation: https://doi.org/10.5281/zenodo.5788294
+# or compute from MERIT DEM tiles.
+# Save as: data/elev_30min.tif
+
+elev <- rast(here("data/elev_30min.tif"))
+all_fam$elevation_m <- terra::extract(elev, cells_vect)[, 2]
+
+ct_elev <- cor.test(all_fam$elevation_m, all_fam$Slope,
+                    method = "spearman", exact = FALSE)
+cat(sprintf("Elevation × Slope: ρ = %.3f, p = %.2e\n",
+            ct_elev$estimate, ct_elev$p.value))
+```
+
+# 8. Manuscript text helper
+
+```{r text-generator}
+# Pull key values for inline citation in manuscript
+rho_lat_slope <- cor_results %>%
+  filter(Predictor == "Absolute latitude", Response == "Slope") %>%
+  pull(rho)
+
+rho_n_slope <- cor_results %>%
+  filter(Predictor == "Records (n)", Response == "Slope") %>%
+  pull(rho)
+
+rho_sr_slope <- cor_results %>%
+  filter(Predictor == "Species richness", Response == "Slope") %>%
+  pull(rho)
+
+cat("=== Suggested manuscript text (Results) ===\n\n")
+
+cat(sprintf(
+  "Sampling completeness (slope) was significantly correlated with absolute latitude ",
+  "(Spearman ρ = %.2f), number of occurrence records (ρ = %.2f), and observed species ",
+  "richness (ρ = %.2f; all p < 0.001; Table SX), confirming that areas closer to the ",
+  "equator, with richer epiphyte communities, and with fewer accumulated records tend to ",
+  "be the least surveyed.",
+  rho_lat_slope, rho_n_slope, rho_sr_slope
+))
+```

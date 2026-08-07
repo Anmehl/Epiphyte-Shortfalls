@@ -1,0 +1,262 @@
+---
+title: "Temporal accumulation of epiphyte occurrence records"
+author: "Maria Carmona-Higuita"
+date: "2026-08"
+output: html_document
+---
+
+This script analyses the temporal dynamics of data accumulation in the EpIG backbone
+dataset. It addresses the context of *why* sampling gaps persist (historical survey
+bias, recent digitization surge) and supports the narrative in the Discussion.
+
+Outputs:
+- `output/figures/FigS_temporal_accumulation.jpg` — records per decade, total + by family
+- `output/figures/FigS_cumulative_records.jpg`    — cumulative curve 1900–2023
+- `output/Tables/TableS_records_by_decade.csv`    — decade × family table
+
+```{r setup, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(here)
+library(patchwork)
+library(MetBrewer)
+
+dir.create(here("output/figures"), recursive = TRUE, showWarnings = FALSE)
+dir.create(here("output/Tables"),  recursive = TRUE, showWarnings = FALSE)
+
+# ── Load the backbone occurrence dataset ─────────────────────────────────────
+load(here("data/occ_epIGbackbone.Rdata"))   # loads as `aa`
+
+focal_families <- c("Orchidaceae", "Bromeliaceae", "Araceae",
+                    "Piperaceae", "Polypodiaceae")
+
+pal_families <- setNames(
+  MetBrewer::met.brewer("Hiroshige", n = 5),
+  focal_families
+)
+```
+
+# 1. Data quality check: year coverage
+
+```{r year-check}
+cat("=== Year column diagnostics ===\n")
+cat(sprintf("Total records: %s\n", format(nrow(aa), big.mark = ",")))
+
+# year may be integer or character — coerce safely
+aa <- aa %>% mutate(year_num = suppressWarnings(as.integer(as.character(year))))
+
+n_with_year <- sum(!is.na(aa$year_num))
+n_no_year   <- sum(is.na(aa$year_num))
+
+cat(sprintf("Records WITH year: %s (%.1f%%)\n",
+            format(n_with_year, big.mark = ","),
+            100 * n_with_year / nrow(aa)))
+cat(sprintf("Records WITHOUT year (NA): %s (%.1f%%)\n",
+            format(n_no_year, big.mark = ","),
+            100 * n_no_year / nrow(aa)))
+
+# Year range for records that have a year
+valid <- aa %>% filter(!is.na(year_num), year_num >= 1750, year_num <= 2025)
+cat(sprintf("Year range (valid records): %d – %d\n",
+            min(valid$year_num), max(valid$year_num)))
+cat(sprintf("Records used in temporal analysis: %s\n",
+            format(nrow(valid), big.mark = ",")))
+```
+
+# 2. Records per decade — all records
+
+```{r decade-all}
+# Assign decade
+valid <- valid %>%
+  mutate(decade = (year_num %/% 10) * 10)
+
+# Focus on 1880–2020 (sparse before 1880)
+decade_all <- valid %>%
+  filter(decade >= 1880, decade <= 2020) %>%
+  count(decade, name = "n_records")
+
+p_decade <- ggplot(decade_all, aes(x = decade, y = n_records)) +
+  geom_col(fill = MetBrewer::met.brewer("Hiroshige")[3], color = "white",
+           linewidth = 0.2, width = 8) +
+  scale_x_continuous(breaks = seq(1880, 2020, 20)) +
+  scale_y_continuous(labels = scales::comma) +
+  labs(x = "Decade", y = "Number of records",
+       title = "Temporal accumulation of epiphyte occurrence records",
+       subtitle = sprintf("All families combined (n = %s records with year data)",
+                          format(nrow(valid), big.mark = ","))) +
+  theme_classic(base_family = "EB Garamond") +
+  theme(panel.grid.major.y = element_line(color = "grey90"),
+        axis.text = element_text(size = 10))
+
+p_decade
+```
+
+# 3. Records per decade — by focal family
+
+```{r decade-family}
+decade_fam <- valid %>%
+  filter(decade >= 1880, decade <= 2020,
+         family %in% focal_families) %>%
+  count(decade, family, name = "n_records")
+
+p_fam <- ggplot(decade_fam, aes(x = decade, y = n_records, fill = family)) +
+  geom_col(color = "white", linewidth = 0.15, width = 8) +
+  scale_fill_manual(values = pal_families, name = "Family") +
+  scale_x_continuous(breaks = seq(1880, 2020, 20)) +
+  scale_y_continuous(labels = scales::comma) +
+  facet_wrap(~family, scales = "free_y", ncol = 2) +
+  labs(x = "Decade", y = "Number of records",
+       title = "Records per decade by family") +
+  theme_classic(base_family = "EB Garamond") +
+  theme(legend.position = "none",
+        strip.background = element_blank(),
+        strip.text = element_text(face = "italic", size = 10),
+        panel.grid.major.y = element_line(color = "grey90"))
+
+p_fam
+```
+
+# 4. Combined figure (main + family panels)
+
+```{r combined-fig, fig.width=12, fig.height=10}
+combined <- p_decade / p_fam +
+  plot_layout(heights = c(1, 2)) +
+  plot_annotation(tag_levels = "A",
+                  theme = theme(plot.tag = element_text(face = "bold")))
+
+combined
+
+ggsave(here("output/figures/FigS_temporal_accumulation.jpg"),
+       plot = combined, width = 12, height = 10, dpi = 300)
+cat("Saved: output/figures/FigS_temporal_accumulation.jpg\n")
+```
+
+# 5. Cumulative record curve
+
+```{r cumulative, fig.width=10, fig.height=5}
+# Total cumulative curve
+cum_all <- valid %>%
+  filter(year_num >= 1880, year_num <= 2023) %>%
+  count(year_num, name = "n") %>%
+  arrange(year_num) %>%
+  mutate(cumulative = cumsum(n))
+
+# By focal family
+cum_fam <- valid %>%
+  filter(year_num >= 1880, year_num <= 2023,
+         family %in% focal_families) %>%
+  count(year_num, family, name = "n") %>%
+  group_by(family) %>%
+  arrange(year_num) %>%
+  mutate(cumulative = cumsum(n)) %>%
+  ungroup()
+
+p_cum_all <- ggplot(cum_all, aes(x = year_num, y = cumulative)) +
+  geom_area(fill = MetBrewer::met.brewer("Hiroshige")[3], alpha = 0.4) +
+  geom_line(color = MetBrewer::met.brewer("Hiroshige")[3], linewidth = 0.8) +
+  scale_y_continuous(labels = scales::comma) +
+  labs(x = "Year", y = "Cumulative records",
+       title = "Cumulative occurrence records — All families",
+       subtitle = "Records with year information only") +
+  theme_classic(base_family = "EB Garamond") +
+  theme(panel.grid.major.y = element_line(color = "grey90"))
+
+p_cum_fam <- ggplot(cum_fam, aes(x = year_num, y = cumulative,
+                                  color = family, fill = family)) +
+  geom_area(alpha = 0.3, position = "identity") +
+  geom_line(linewidth = 0.6) +
+  scale_color_manual(values = pal_families, name = NULL) +
+  scale_fill_manual(values = pal_families,  name = NULL) +
+  scale_y_continuous(labels = scales::comma) +
+  labs(x = "Year", y = "Cumulative records",
+       title = "Cumulative records by family") +
+  theme_classic(base_family = "EB Garamond") +
+  theme(legend.position = "bottom",
+        legend.text = element_text(face = "italic"),
+        panel.grid.major.y = element_line(color = "grey90"))
+
+cum_combined <- p_cum_all + p_cum_fam
+
+ggsave(here("output/figures/FigS_cumulative_records.jpg"),
+       plot = cum_combined, width = 12, height = 5, dpi = 300)
+cat("Saved: output/figures/FigS_cumulative_records.jpg\n")
+
+cum_combined
+```
+
+# 6. Key periods: pre-2000 vs. post-2000 digitization surge
+
+```{r digitization}
+cat("=== Records by broad period ===\n")
+valid %>%
+  filter(year_num >= 1880, year_num <= 2023) %>%
+  mutate(period = case_when(
+    year_num < 1950 ~ "Pre-1950 (early exploration)",
+    year_num < 2000 ~ "1950–1999 (mid-century surveys)",
+    year_num < 2010 ~ "2000–2009 (early digitization)",
+    TRUE            ~ "2010–2023 (GBIF era)"
+  )) %>%
+  count(period) %>%
+  mutate(pct = round(100 * n / sum(n), 1)) %>%
+  arrange(period) %>%
+  print()
+
+# By family and period
+valid %>%
+  filter(year_num >= 1880, year_num <= 2023,
+         family %in% focal_families) %>%
+  mutate(period = if_else(year_num >= 2000, "post-2000", "pre-2000")) %>%
+  count(family, period) %>%
+  pivot_wider(names_from = period, values_from = n, values_fill = 0) %>%
+  mutate(pct_post2000 = round(100 * `post-2000` / (`pre-2000` + `post-2000`), 1)) %>%
+  arrange(desc(pct_post2000)) %>%
+  print()
+```
+
+# 7. Records per decade × family — summary table
+
+```{r table-decade}
+table_decade <- valid %>%
+  filter(decade >= 1880, decade <= 2020) %>%
+  mutate(family_group = if_else(family %in% focal_families, family, "Other")) %>%
+  count(decade, family_group, name = "n_records") %>%
+  pivot_wider(names_from = family_group, values_from = n_records, values_fill = 0) %>%
+  arrange(decade)
+
+# Add total column
+table_decade <- table_decade %>%
+  rowwise() %>%
+  mutate(Total = sum(c_across(-decade))) %>%
+  ungroup()
+
+write.csv(table_decade,
+          here("output/Tables/TableS_records_by_decade.csv"),
+          row.names = FALSE)
+
+cat("Saved: output/Tables/TableS_records_by_decade.csv\n")
+print(table_decade)
+```
+
+# 8. Note on records without year data
+
+```{r no-year-note}
+cat("=== Records without year data ===\n")
+cat(sprintf(
+  "%.1f%% of records in occ_epIGbackbone lack year information (year = NA).\n",
+  100 * n_no_year / nrow(aa)
+))
+cat("These are excluded from temporal analyses above.\n")
+cat("Year-less records still contribute to KnowBR completeness estimates (Script 03).\n\n")
+
+# By family — proportion without year
+aa %>%
+  mutate(has_year = !is.na(suppressWarnings(as.integer(as.character(year))))) %>%
+  filter(family %in% focal_families) %>%
+  group_by(family) %>%
+  summarise(
+    total     = n(),
+    with_year = sum(has_year),
+    pct_year  = round(100 * mean(has_year), 1)
+  ) %>%
+  arrange(desc(pct_year)) %>%
+  print()
+```

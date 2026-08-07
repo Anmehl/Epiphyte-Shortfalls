@@ -16,14 +16,14 @@ options(locale = locale(encoding = "UTF-8"))
 
 # Define file paths and projection settings
 
-  data="data/occ_epIGbackbone.Rdata"# Input data file (EpIG backbone)
+  data="data/occs_epig_gbif.Rdata"# Input data file
   wgsrpd = "level2/level2.shp"# Shapefile for WGSRPD regions
   projection ="+proj=laea +lat_0=-10 +lon_0=-71 +x_0=0 +y_0=0 +a=6370997 +b=6370997 +units=m +no_defs" # Custom projection
   
   
   # Load data and prepare species column
   load(data)
-  some <- aa
+  some <- occs_epig_gbif_subset
   colnames(some)[colnames(some) == "species"] <- "Accepted_Name"
   
   # Load and transform WGSRPD shapefile
@@ -138,16 +138,51 @@ options(locale = locale(encoding = "UTF-8"))
     rename("Species"=binomial,"Longitude"=x,"Latitude"=y)
   
   
-  ### FIFTH DEGREE — skipped for this run (outputs already exist in interim/)
-  # Uncomment this block only if you need to regenerate the 15 arc-min grid
-  # g <- raster::raster(nrows=180*5,ncols=360*5,xmn=-180,xmx=180,ymn=-90,ymx=90,vals=1)
-  # ... (see backup 02_Datagrid_creation_for_each_resolution_ORIGINAL_GBIF.Rmd)
+  ### FIFTH DEGREE
+  g <- raster::raster(nrows=180*5,ncols=360*5,xmn=-180,xmx=180,ymn=-90,ymx=90,vals=1) 
+  
+    g[] <- runif(ncell(g))
+  crs(g) <- "+proj=laea +lat_0=-10 +lon_0=-71 +x_0=0 +y_0=0 +a=6370997 +b=6370997 +units=m +no_defs"
+  projection(g)
 
-  # Combine grid resolutions — 30 arc-min only for this run
-  for_comp <- list(half_degree = half_degree)
+ g <-  as(g, 'SpatialPixels')
+
+
+
+  gridded %>% dplyr::select(decimalLongitude,decimalLatitude) %>% 
+    sf::st_as_sf(x = ., coords = c("decimalLongitude", "decimalLatitude"), crs = "+proj=laea +lat_0=-10 +lon_0=-71 +x_0=0 +y_0=0 +a=6370997 +b=6370997 +units=m +no_defs") %>%
+    sf::st_transform(.,crs = proj4string(g)) %>%
+    sf::st_coordinates() %>% SpatialPoints(.,proj4string= CRS(projection)) %>%
+    sp::over(.,g) %>% enframe(.,name="name") %>% 
+    rename_with(.,~all_of(c("name","CellID_0.2d"))) %>%
+    dplyr::select(CellID_0.2d) %>% bind_cols(.,gridded) -> gridded
+  
+  
+  g@coords %>% as_tibble() %>% mutate(CellID_0.2d=1:nrow(.)) -> coords
+  pointos <- coords %>% dplyr::select(1:2) %>% as.data.frame(.) %>% SpatialPoints(.)
+  proj4string(pointos) <- projection
+  points_powo <- sp::over(pointos,poly) %>% as_tibble()
+  coords %<>% bind_cols(.,points_powo)
+  
+  gridded %>% filter(!is.na(Accepted_Name)) %>%
+    dplyr::select(CellID_0.2d,Accepted_Name,family) %>% 
+    group_by(CellID_0.2d,Accepted_Name,family) %>% summarize(Counts=n()) %>% 
+    ungroup() %>% right_join(.,coords,by="CellID_0.2d") -> fifth_degree
+  
+  fifth_degree %<>% mutate(binomial_accepted=Accepted_Name) %>% mutate(binomial_accepted=sub("× ","",binomial_accepted))
+  fifth_degree %<>% mutate(binomial_accepted=sub(" ","_",binomial_accepted))
+  fifth_degree %<>% separate(binomial_accepted,into=c("binomial"),extra = "warn",sep=" ")
+  fifth_degree
+  fifth_degree %<>% ungroup() %>%  dplyr::select(binomial,x,y,Counts,LEVEL2_NAM,family) %>% 
+    rename("Species"=binomial,"Longitude"=x,"Latitude"=y)
+  
+
+  # Combine all grid resolutions into a single list
+  for_comp <- list(half_degree = half_degree,
+                   fifth_degree = fifth_degree)
   
   #Save dataset
-  save(for_comp,file = here("output/pams_for_completeness_v2.Rdata"))
+#  save(for_comp,file = here("output/pams_for_completeness_v2.Rdata"))
 
 ```
 
