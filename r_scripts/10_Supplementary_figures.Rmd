@@ -91,10 +91,11 @@ fam_labels <- c("Total",       "Araceae", "Bromeliaceae",
 names(fam_labels) <- fam_order
 
 # 3-category palette (S6 and S7)
+# Revised per reviewer request: heatmap convention (warm = data-rich, cool = data-poor)
 cat_cols <- c(
-  "Well-surveyed"   = "#1B9E77",   # teal
-  "Fairly-surveyed" = "#FFC107",   # amber
-  "Poorly-surveyed" = "#D32F2F"    # red
+  "Well-surveyed"   = "#C0392B",   # red  (well-sampled = data-rich)
+  "Fairly-surveyed" = "#A8D5A2",   # light green
+  "Poorly-surveyed" = "#2E86AB"    # steel blue (poorly-sampled = data-poor)
 )
 
 # Base map theme
@@ -110,7 +111,7 @@ make_cat_panel <- function(fam, dat, poly, col_var, palette) {
   d <- dat %>% filter(Family == fam, !is.na(.data[[col_var]]))
   ggplot() +
     geom_sf(data = poly, fill = "grey92", color = "grey70", linewidth = 0.15) +
-    geom_sf(data = d, aes(color = .data[[col_var]]), size = 0.45, alpha = 0.85) +
+    geom_sf(data = d, aes(color = .data[[col_var]]), size = 0.45, alpha = 0.85, stroke = 0) +
     scale_color_manual(values = palette, drop = FALSE) +
     coord_sf(crs = crs_moll, expand = FALSE) +
     theme_map +
@@ -122,7 +123,7 @@ make_rec_panel <- function(fam, dat, poly) {
   d <- dat %>% filter(Family == fam, !is.na(Records), Records > 0)
   ggplot() +
     geom_sf(data = poly, fill = "grey92", color = "grey70", linewidth = 0.15) +
-    geom_sf(data = d, aes(color = log10(Records)), size = 0.45, alpha = 0.85) +
+    geom_sf(data = d, aes(color = log10(Records)), size = 0.45, alpha = 0.85, stroke = 0) +
     scale_color_gradientn(
       colors   = MetBrewer::met.brewer("Hiroshige", direction = -1),
       name     = "log₁₀(Records)",
@@ -243,7 +244,7 @@ fig_s8 <- ggplot() +
           fill  = "grey92", color = "grey70", linewidth = 0.15) +
   geom_sf(data  = hot_sf,
           aes(color = Completeness_class),
-          size  = 0.8, alpha = 0.9) +
+          size  = 0.8, alpha = 0.9, stroke = 0) +
   scale_color_manual(
     values = c("Hotspot" = "#D32F2F", "Coldspot" = "#1565C0"),
     name   = "Cluster type"

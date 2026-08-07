@@ -1,0 +1,16 @@
+"Predictor","Response","rho","p_value","n_cells"
+"Absolute latitude","Slope",-0.067,"1.060e-03",2389
+"Absolute latitude","Completeness",0.084,"4.125e-05",2389
+"Absolute latitude","Ratio",0.076,"2.050e-04",2389
+"Dist. to region centroid (km)","Slope",-0.132,"8.921e-11",2389
+"Dist. to region centroid (km)","Completeness",0.139,"7.679e-12",2389
+"Dist. to region centroid (km)","Ratio",0.149,"2.354e-13",2389
+"Records per species","Slope",-0.967,"0.000e+00",2389
+"Records per species","Completeness",0.986,"0.000e+00",2389
+"Records per species","Ratio",1,"0.000e+00",2389
+"Species richness","Slope",-0.251,"1.474e-35",2389
+"Species richness","Completeness",0.253,"4.007e-36",2389
+"Species richness","Ratio",0.337,"1.450e-64",2389
+"Records (n)","Slope",-0.511,"6.271e-159",2389
+"Records (n)","Completeness",0.518,"3.037e-164",2389
+"Records (n)","Ratio",0.596,"2.389e-229",2389

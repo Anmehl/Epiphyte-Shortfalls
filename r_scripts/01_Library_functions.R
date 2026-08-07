@@ -9,7 +9,8 @@
 packages <- c("tidyverse", "magrittr", "sf", "spdep",
               "here", "sp", "rnaturalearth", 
               "rnaturalearthdata", "showtext", 
-              "patchwork", "ape", "taxadb", "bdc",
+              "patchwork", "ape", "taxadb", 
+              # "bdc",
               "UpSetR", "KnowBR", "vegan", "plotrix", 
               "viridis", "raster", "biscale", "fuzzyjoin", 
               "openxlsx", "rworldmap", "WorldFlora","stars","terra")

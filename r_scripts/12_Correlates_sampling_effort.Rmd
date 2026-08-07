@@ -114,9 +114,9 @@ pred_labels <- c("Absolute latitude", "Dist. to region centroid (km)",
                   "Records per species", "Species richness", "Records (n)")
 responses   <- c("Slope", "Completeness", "Ratio")
 
-cor_results <- map_df(seq_along(predictors), function(i) {
+cor_results <- purrr::map_df(seq_along(predictors), function(i) {
   pred <- predictors[i]
-  map_df(responses, function(resp) {
+  purrr::map_df(responses, function(resp) {
     x <- all_fam[[pred]]
     y <- all_fam[[resp]]
     # Remove NAs pairwise
@@ -159,7 +159,7 @@ cat("\nSaved: output/Tables/TableS_correlates.csv\n")
 # Filter to predictors with data
 plot_preds <- predictors[sapply(predictors, function(p) sum(!is.na(all_fam[[p]])) > 0)]
 
-scatter_list <- map(seq_along(plot_preds), function(i) {
+scatter_list <- purrr::map(seq_along(plot_preds), function(i) {
   pred <- plot_preds[i]
   label <- pred_labels[which(predictors == pred)]
 
@@ -236,7 +236,7 @@ focal_families <- c("Orchidaceae", "Bromeliaceae", "Araceae",
                     "Piperaceae", "Polypodiaceae")
 
 cat("=== Spearman ρ (Slope ~ abs_lat) by family ===\n")
-map_df(focal_families, function(fam) {
+purrr::map_df(focal_families, function(fam) {
   d <- datos %>% filter(Family == fam, !is.na(Slope)) %>%
     mutate(abs_lat = abs(Latitude))
   if (nrow(d) < 10) return(NULL)

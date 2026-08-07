@@ -27,8 +27,9 @@ options(locale = locale(encoding = "UTF-8"))
   colnames(some)[colnames(some) == "species"] <- "Accepted_Name"
   
   # Load and transform WGSRPD shapefile
-  poly <- rgdal::readOGR(here("wgsrpd-master",wgsrpd))%>%
-  spTransform(., CRS(projection))# Reproject shapefile
+  poly <- sf::st_read(here("wgsrpd-master", wgsrpd), quiet = TRUE) %>%
+    sf::st_transform(crs = projection) %>%
+    as("Spatial")  # rgdal retired; sf equivalent
  
  
   # Filter polygons for specific regions   
@@ -38,7 +39,7 @@ options(locale = locale(encoding = "UTF-8"))
   spList = vector("list", length(poly))
   for (i in 1:length(poly)) {
     cat(i,"\r")
-    a <- rgeos::gBuffer(poly[i,], width = 0.5)  # Add buffer to polygons
+    a <- poly[i,] %>% sf::st_as_sf() %>% sf::st_buffer(dist = 0.5) %>% as("Spatial")  # buffer via sf (rgeos retired)
     a$LEVEL2_COD = poly[i,]$LEVEL2_COD
     a$LEVEL2_NAM = poly[i,]$LEVEL2_NAM
     spList[[i]] <- a

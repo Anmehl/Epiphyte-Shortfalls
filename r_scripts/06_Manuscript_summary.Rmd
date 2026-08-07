@@ -1,6 +1,8 @@
 ---
 title: "R Notebook"
 output: html_notebook
+editor_options: 
+  chunk_output_type: inline
 ---
 
 ```{r}
@@ -293,6 +295,8 @@ result <- datos %>%
   summarise(
     mean_n = mean(n, na.rm = TRUE),
     mean_sr = mean(SR, na.rm = TRUE),
+    median_n = median(n, na.rm = TRUE),
+    median_sr = median(SR, na.rm = TRUE),
     TS_WS = 100 * sum(sampling_category == "well-sampled", na.rm = TRUE) / n(),
     TS_FS = 100 * sum(sampling_category == "fairly-sampled", na.rm = TRUE) / n(),
     TS_PS = 100 * sum(sampling_category == "poorly-sampled", na.rm = TRUE) / n(),
